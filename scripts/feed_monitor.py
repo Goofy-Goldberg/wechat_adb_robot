@@ -1,8 +1,7 @@
 # coding:utf-8
 import logging
-import re
 import time
-from wechat_adb_robot.core.robot import ADBRobot
+from core.robot import ADBRobot
 
 
 class FeedItem:
@@ -48,9 +47,6 @@ class WeChatFeedMonitor:
             self.logger.info("Starting loop {}".format(loop_index))
             # Turn screen on
             self.bot.screen_on()
-
-            # Open clipboard app
-            self.bot.ensure_clipboard()
 
             # Return to home screen
             self.bot.go_home()
@@ -102,33 +98,30 @@ class WeChatFeedMonitor:
         # TODO: Add logic to scroll and continue searching if not found on current screen
 
         dumps = self.bot.uidump_and_get_node()
-        bounds672 = self.bot.get_node_bounds(
-            "text",
-            "订阅号",
-            dumps=dumps,  # "Subscriptions"
-        )  # For versions before 6.7.3
-        bounds673 = self.bot.get_node_bounds(
-            "text",
-            "订阅号消息",
-            dumps=dumps,  # "Subscription Messages"
-        )  # For versions after 6.7.3
 
-        if bounds672:
-            self.bot.click_bounds(bounds672)
-        elif bounds673:
-            self.bot.click_bounds(bounds673)
-            time.sleep(2)
-            # For versions after 6.7.3, need to click the three-line more button in top right to enter list page
-            boundsMore = self.bot.get_node_bounds(
-                "content-desc",
-                "订阅号",  # "Subscriptions"
-            )  # For versions before 6.7.3
-            if boundsMore:
-                self.bot.click_bounds(boundsMore)
-            else:
-                self.logger.error(
-                    "Cannot find more button in subscription message page"
-                )
+        bounds = self.bot.get_node_bounds(
+            "text",
+            "Official Account",
+            dumps=dumps,
+        )
+
+        # if bounds:  # doesn't seem like this is needed
+        #     self.bot.click_bounds(bounds)
+        #     time.sleep(2)
+        #     # For versions after 6.7.3, need to click the three-line more button in top right to enter list page
+        #     boundsMore = self.bot.get_node_bounds(
+        #         "content-desc",
+        #         "订阅号",  # "Subscriptions"
+        #     )  # For versions before 6.7.3
+        #     if boundsMore:
+        #         self.bot.click_bounds(boundsMore)
+        #     else:
+        #         self.logger.error(
+        #             "Cannot find more button in subscription message page"
+        #         )
+        if bounds:
+            self.bot.click_bounds(bounds)
+            time.sleep(1)
         else:
             self.logger.error(
                 "Cannot find subscription tab, please confirm it's on WeChat home page"
@@ -148,12 +141,16 @@ class WeChatFeedMonitor:
         Get the first screen of subscription list on subscription page
         """
         page_node = self.bot.uidump_and_get_node()
-        return [
-            FeedItem(node)
-            for node in page_node.xpath(
-                '//node[@class="android.widget.ListView"]/node/node[@index="1"]'
-            )
-        ]
+        nodes = page_node.xpath(
+            '//node[@class="android.widget.ListView"]/node/node[@index="1"]'
+        )
+        feed_items = []
+        for node in nodes:
+            try:
+                feed_items.append(FeedItem(node))
+            except Exception:
+                self.logger.exception("Error parsing feed item")
+        return feed_items
 
     def get_feed_list_and_find_updates(self, set_new=True):
         """

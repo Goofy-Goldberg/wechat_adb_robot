@@ -1,8 +1,8 @@
 # coding:utf-8
 from dotenv import load_dotenv
 import os
-from ..scripts.feed_monitor import WeChatFeedMonitor
-from ..lib.utils import new_stream_logger
+from scripts.feed_monitor import WeChatFeedMonitor
+from lib.utils import new_stream_logger
 
 
 def push_result(url):

@@ -3,7 +3,6 @@ import logging
 import re
 import time
 from lxml import etree
-import os.path as op
 import subprocess
 
 logger = logging.getLogger("adb_robot")
@@ -171,7 +170,7 @@ class ADBRobot:
             bounds = dumps.xpath(
                 '//node[@{}="{}"]/@bounds'.format(attr_name, attr_value)
             )[0]
-        except Exception as e:
+        except Exception:
             return False
         return bounds
 
@@ -192,25 +191,70 @@ class ADBRobot:
             (bounds_points[1] + bounds_points[3]) / 2,
         )
 
-    def ensure_clipboard(self):
+    def set_clipboard_text(self, text):
         """
-        Launch clipper app https://github.com/majido/clipper
+        Set clipboard text using Android's built-in clipboard
         """
-        if not self.is_app_installed("ca.zgrs.clipper"):
-            raise ValueError(
-                "clipper not installed! please install first: adb install -r apks/clipper1.2.1.apk"
-            )
-        self.run_app("ca.zgrs.clipper")
+        escaped_text = text.replace(
+            '"', '\\"'
+        )  # Escape quotes to prevent shell command issues
+        self.shell(f'am broadcast -a clipper.set -e text "{escaped_text}"')
 
     def get_clipboard_text(self):
         """
-        Make sure clipper app is installed and running https://github.com/majido/clipper
+        Get clipboard text using Android's built-in clipboard manager
         """
-        dumps = self.shell("am broadcast -a clipper.get")
-        matched = re.compile(r'[\s\S]*data="(.*?)"[\s\S]*').match(dumps)
-        if matched:
-            text = matched.groups()[0]
-        else:
-            logger.error("get_clipboard_text error, make sure clipper app is running!")
-            text = ""
-        return text
+        # Copy to a temporary file since clipboard content might contain special characters
+        tmp_file = "/sdcard/clipboard_content.txt"
+        self.shell(f"service call clipboard 2 i32 1 > {tmp_file}")
+        content = self.shell(f"cat {tmp_file}")
+        self.shell(f"rm {tmp_file}")
+
+        # Parse the service call output
+        if "Parcel" in content:
+            try:
+                # Extract text between quotes if present
+                match = re.search(r'"([^"]*)"', content)
+                if match:
+                    return match.group(1)
+            except Exception as e:
+                logger.error(f"Error parsing clipboard content: {e}")
+        return ""
+
+    def copy_to_clipboard(self, text):
+        """
+        Copy text to clipboard using input commands
+        """
+        # First, create a temporary file with the text
+        tmp_file = "/sdcard/temp_text.txt"
+        self.shell(f'echo "{text}" > {tmp_file}')
+
+        # Launch a text editor (using Google Keep as an example)
+        self.run_app("com.google.android.keep")
+        time.sleep(1)  # Wait for app to launch
+
+        # Create new note
+        self.tap(
+            self.wm.width / 2, self.wm.height - 100
+        )  # Adjust coordinates as needed
+        time.sleep(0.5)
+
+        # Input the text
+        self.shell(f'input text "$(cat {tmp_file})"')
+        time.sleep(0.5)
+
+        # Select all (Ctrl+A)
+        self.shell("input keyevent 29 keyevent 31")  # KEYCODE_A while holding Ctrl
+        time.sleep(0.5)
+
+        # Copy (Ctrl+C)
+        self.shell("input keyevent 29 keyevent 47")  # KEYCODE_C while holding Ctrl
+
+        # Clean up
+        self.shell(f"rm {tmp_file}")
+        self.go_back()
+        self.go_back()  # Exit Keep
+
+    def remove_ensure_clipboard(self):
+        # Remove the old ensure_clipboard method as it's no longer needed
+        pass
