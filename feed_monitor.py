@@ -1,9 +1,10 @@
 # coding:utf-8
 import time
+import json
+import os
 from com.dtmilano.android.viewclient import ViewClient
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
-import os
 from core.robot import ADBRobot
 
 
@@ -24,6 +25,28 @@ class WeChatFeedMonitor:
         self.device, self.serialno = ViewClient.connectToDeviceOrExit(serialno=serial)
         self.vc = ViewClient(self.device, self.serialno)
         self.bot = ADBRobot(serial=serial, adb_path=adb_path)
+        self.seen_articles_file = "seen_articles.json"
+        self._load_seen_articles()
+
+    def _load_seen_articles(self):
+        """Load previously seen articles from JSON file"""
+        try:
+            if os.path.exists(self.seen_articles_file):
+                with open(self.seen_articles_file, "r") as f:
+                    self.seen_articles = json.load(f)
+            else:
+                self.seen_articles = {}
+        except Exception as e:
+            self.logger.error(f"Error loading seen articles: {e}")
+            self.seen_articles = {}
+
+    def _save_seen_articles(self):
+        """Save seen articles to JSON file"""
+        try:
+            with open(self.seen_articles_file, "w") as f:
+                json.dump(self.seen_articles, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"Error saving seen articles: {e}")
 
     def run(self, skip_first_batch=True, sleep_interval=30):
         """
@@ -41,15 +64,15 @@ class WeChatFeedMonitor:
 
             # Return to home screen
             self.bot.go_home()
-            time.sleep(1)
+            time.sleep(0.1)
 
             # Open WeChat home page
             self.ensure_wechat_front()
-            time.sleep(1)
+            time.sleep(0.1)
 
             # Enter subscription page
             self.go_feed_page()
-            time.sleep(1)
+            time.sleep(0.1)
 
             if skip_first_batch and loop_index == 0:
                 # Save and skip the first captured subscription list
@@ -63,7 +86,7 @@ class WeChatFeedMonitor:
 
             # Return to home screen
             self.bot.force_home()
-            time.sleep(1)
+            time.sleep(0.1)
 
             # Turn screen off
             self.bot.screen_off()
@@ -210,15 +233,27 @@ class WeChatFeedMonitor:
         Get the first screen of subscription list and find updated subscription items
         """
         new_feed_list = self.get_feed_list()
-        old_account_names = [_.account_name for _ in self.last_feed_list]
         result = []
 
-        for new_feed_item in new_feed_list:
-            if new_feed_item.account_name not in old_account_names:
-                result.append(new_feed_item)
+        for feed_item in new_feed_list:
+            try:
+                # Create a unique key for the article using account and title
+                article_key = f"{feed_item['account']}:{feed_item['title']}"
+
+                # Check if we've seen this article before
+                if article_key not in self.seen_articles:
+                    result.append(feed_item)
+                    if set_new:
+                        # Store the article with timestamp
+                        self.seen_articles[article_key] = {
+                            "timestamp": feed_item["timestamp"],
+                            "first_seen": time.time(),
+                        }
+            except Exception as e:  # at this point the likely error be that not the entire feed item is visible
+                self.logger.exception(f"Error processing feed item: {e}")
 
         if set_new:
-            self.last_feed_list = new_feed_list
+            self._save_seen_articles()
 
         return result
 
@@ -230,7 +265,7 @@ class WeChatFeedMonitor:
         newly_update_feed_list = self.get_feed_list_and_find_updates(set_new=True)
         self.logger.info(
             "Recently updated official accounts: {}".format(
-                [_.account_name for _ in newly_update_feed_list]
+                [_["account"] for _ in newly_update_feed_list]
             )
         )
 
@@ -238,10 +273,10 @@ class WeChatFeedMonitor:
             # Enter subscription detail page
             self.logger.info(
                 "Entering subscription [{}] detail page ...".format(
-                    feed_item.account_name
+                    feed_item["account"]
                 )
             )
-            self.bot.click_bounds(feed_item.bounds)
+            self.bot.click_bounds(feed_item["bounds"])
 
             # Get latest article list for the subscription
             feed_articles = self.get_feed_articles_in_account_page()
@@ -256,7 +291,7 @@ class WeChatFeedMonitor:
                 # Click article detail page
                 self.logger.debug("Entering article detail page ...")
                 self.bot.click_bounds(feed_article_item.bounds)
-                time.sleep(2)
+                time.sleep(2)  # let the page load
 
                 # Click more
                 self.logger.debug("Clicking more ...")
@@ -266,7 +301,7 @@ class WeChatFeedMonitor:
                 )  # "More"
                 if more_button_bounds:
                     self.bot.click_bounds(more_button_bounds)
-                    time.sleep(2)
+                    time.sleep(2)  # let load
                 else:
                     self.logger.error("Cannot find more button, article issue?")
 
@@ -278,7 +313,7 @@ class WeChatFeedMonitor:
                 )  # "Copy Link"
                 if copy_link_btn_bounds:
                     self.bot.click_bounds(copy_link_btn_bounds)
-                    time.sleep(1)
+                    time.sleep(0.1)
 
                     # Get clipboard content and output
                     self.output_result(self.bot.get_clipboard_text())
