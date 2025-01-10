@@ -19,7 +19,7 @@ class WindowManager:
 
     def get_size(self):
         o = self.wm_shell("size")
-        m = re.match(".*?(\d+)x(\d+).*?", o)
+        m = re.match(r".*?(\d+)x(\d+).*?", o)
         if not m:
             raise ValueError("Unable to get window dimensions: {}".format(o))
         x, y = m.groups()
@@ -220,11 +220,15 @@ class ADBRobot:
         """
         bounds = '[42,1023][126,1080]'
         """
-        bounds_points = self.get_points_in_bounds(bounds)
-        self.tap(
-            (bounds_points[0] + bounds_points[2]) / 2,
-            (bounds_points[1] + bounds_points[3]) / 2,
-        )
+        # check if bounds is tuple
+        if isinstance(bounds, tuple):
+            self.tap(bounds[0][0] + bounds[1][0] / 2, bounds[0][1] + bounds[1][1] / 2)
+        else:
+            bounds_points = self.get_points_in_bounds(bounds)
+            self.tap(
+                (bounds_points[0] + bounds_points[2]) / 2,
+                (bounds_points[1] + bounds_points[3]) / 2,
+            )
 
     def set_clipboard_text(self, text):
         """
