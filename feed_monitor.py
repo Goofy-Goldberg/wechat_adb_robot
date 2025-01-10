@@ -153,7 +153,6 @@ class WeChatFeedMonitor:
                 time.sleep(0.1)
 
             # Loop through the feed items
-            processed_articles_username_ids = set()
 
             self.vc.dump()
             # check if there is any element with the text "Show earlier messages"
@@ -175,21 +174,25 @@ class WeChatFeedMonitor:
                 # Get header views
                 header_views = []
                 for view_id in views:
-                    aq0_view = self.vc.findViewById(view_id)
-                    if aq0_view.map[
+                    view = self.vc.findViewById(view_id)
+                    if view.map[
                         "resource-id"
                     ].endswith(
                         "axy"
                     ):  # nb: axy refers to the username view in the feed item, not the feed item/article itself
-                        header_views.append(aq0_view)
+                        header_views.append(view)
 
-                while True:  # loop until we navigate to an article
+                article_ready_to_process = False
+
+                while (
+                    not article_ready_to_process
+                ):  # loop until we navigate to an article
                     selected_view = None
 
                     for view_id in views:
-                        aq0_view = self.vc.findViewById(view_id)
-                        if aq0_view.map["selected"] == "true":
-                            selected_view = aq0_view
+                        view = self.vc.findViewById(view_id)
+                        if view.map["selected"] == "true":
+                            selected_view = view
                             break
 
                     if selected_view:
@@ -202,92 +205,106 @@ class WeChatFeedMonitor:
                             self.vc.dump()
                             views = self.vc.getViewsById()
                         else:
-                            if (
-                                selected_view.getId()
-                                not in processed_articles_username_ids
-                            ):
-                                processed_articles_username_ids.add(
-                                    selected_view.getId()
-                                )
-                                break
-                            else:
-                                print(
-                                    f"still on {selected_view.getId()}, probably just shifted the whole article tile into view. Moving down..."
-                                )
-                                self.bot.shell("input keyevent 20")
-                                time.sleep(0.1)
-                                self.vc.dump()
-                                views = self.vc.getViewsById()
+                            # now we are on the article, or rather on the account name view (axy). We'll get the metadata now.
 
-                            # todo: double check which article is selected using article_views - check the order using selected_view.getUniqueId()
+                            metadata_complete = False  # if the title isn't fully visible, we'll have go down again... there doesn't seem to be a more elegant way of testing this though
 
-                # view_structure = self._get_view_structure()
+                            while not metadata_complete:
+                                siblings = self.vc.findViewById(
+                                    selected_view.parent.getUniqueId()
+                                ).children
 
-                siblings = self.vc.findViewById(
-                    selected_view.parent.getUniqueId()
-                ).children
+                                # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
 
-                # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
+                                found_current = False
+                                view = None
 
-                found_current = False
-                aq0_view = None
+                                for sibling in siblings:
+                                    # check if we are on the selected view (axa)
+                                    if sibling == selected_view:
+                                        found_current = True
+                                    elif found_current:
+                                        if sibling.getId() == "com.tencent.mm:id/aq0":
+                                            view = sibling
+                                            break
 
-                for sibling in siblings:
-                    # check if we are on the selected view (axa)
-                    if sibling == selected_view:
-                        found_current = True
-                    elif found_current:
-                        if sibling.getId() == "com.tencent.mm:id/aq0":
-                            aq0_view = sibling
-                            break
-
-                if not aq0_view:
-                    self.logger.error("Cannot find aq0 view")  # todo: handle better
-                    break
-
-                # Find header containers
-                article_metadata = {}
-
-                # Recursive function to search through children
-                def find_in_children(view, article_metadata):
-                    if view.map.get("resource-id", "").endswith("lu8"):
-                        article_metadata["account"] = view.map.get("text", "")
-                    elif view.map.get("resource-id", "").endswith("qdv"):
-                        article_metadata["timestamp"] = view.map.get("text", "")
-
-                    for child in view.getChildren():
-                        find_in_children(child, article_metadata)
-
-                # Search through this container's children
-                find_in_children(aq0_view, article_metadata)
-
-                # Look for title in next sibling container
-                if "account" in article_metadata and "timestamp" in article_metadata:
-                    parent = aq0_view.getParent()
-                    if parent:
-                        siblings = parent.getChildren()
-                        found_current = False
-                        for sibling in siblings:
-                            if sibling == aq0_view:
-                                found_current = True
-                                continue
-                            if found_current:
-                                # Look for title in this container's children
-                                def find_title(view):
-                                    if view.map.get("resource-id", "").endswith("ozs"):
-                                        return view.map.get("text", "")
-                                    for child in view.getChildren():
-                                        title = find_title(child)
-                                        if title:
-                                            return title
-                                    return None
-
-                                title = find_title(sibling)
-                                if title:
-                                    article_metadata["title"] = title
+                                if not view:
+                                    self.logger.error(
+                                        "Cannot find aq0 view"
+                                    )  # todo: handle better
                                     break
 
-                    print(f"Found article: {article_metadata}")
+                                # Find header containers
+                                article_metadata = {}
+
+                                # Recursive function to search through children
+                                def find_in_children(view, article_metadata):
+                                    if view.map.get("resource-id", "").endswith("lu8"):
+                                        article_metadata["account"] = view.map.get(
+                                            "text", ""
+                                        )
+                                    elif view.map.get("resource-id", "").endswith(
+                                        "qdv"
+                                    ):
+                                        article_metadata["timestamp"] = view.map.get(
+                                            "text", ""
+                                        )
+
+                                    for child in view.getChildren():
+                                        find_in_children(child, article_metadata)
+
+                                # Search through this container's children
+                                find_in_children(view, article_metadata)
+
+                                # Look for title in next sibling container
+                                if (
+                                    "account" in article_metadata
+                                    and "timestamp" in article_metadata
+                                ):
+                                    parent = view.getParent()
+                                    if parent:
+                                        siblings = parent.getChildren()
+                                        found_current = False
+                                        for sibling in siblings:
+                                            if sibling == view:
+                                                found_current = True
+                                                continue
+                                            if found_current:
+                                                # Look for title in this container's children
+                                                def find_title(view):
+                                                    if view.map.get(
+                                                        "resource-id", ""
+                                                    ).endswith("ozs"):
+                                                        return view.map.get("text", "")
+                                                    for child in view.getChildren():
+                                                        title = find_title(child)
+                                                        if title:
+                                                            return title
+                                                    return None
+
+                                                title = find_title(sibling)
+                                                if title:
+                                                    metadata_complete = True
+                                                    article_metadata["title"] = title
+                                                    print(
+                                                        f"Found article: {article_metadata}"
+                                                    )
+                                                    article_ready_to_process = True
+                                                    break  # stop processing siblings
+                                                else:  # title not visible, so we'll have to go down again and refresh the view structure and the selected view (because it's id may change)
+                                                    self.bot.shell("input keyevent 20")
+                                                    time.sleep(0.1)
+                                                    self.vc.dump()
+                                                    views = self.vc.getViewsById()
+                                                    for view_id in views:
+                                                        view = self.vc.findViewById(
+                                                            view_id
+                                                        )
+                                                        if (
+                                                            view.map["selected"]
+                                                            == "true"
+                                                        ):
+                                                            selected_view = view
 
                 # check if article in seen_articles
                 article_key = (
