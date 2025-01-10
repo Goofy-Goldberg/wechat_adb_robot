@@ -43,6 +43,7 @@ class WeChatFeedMonitor:
         self.adb_client = AdbClient(serialno=serial)
         self.seen_articles_file = "seen_articles.json"
         self._load_seen_articles()
+        self.seen_articles_this_run = {}
 
     def _load_seen_articles(self):
         """Load previously seen articles from JSON file"""
@@ -201,7 +202,7 @@ class WeChatFeedMonitor:
                                 f"selected view {selected_view.getId()} is not an article: moving down..."
                             )
                             self.bot.shell("input keyevent 20")
-                            time.sleep(0.1)
+                            time.sleep(0.2)
                             self.vc.dump()
                             views = self.vc.getViewsById()
                         else:
@@ -293,7 +294,7 @@ class WeChatFeedMonitor:
                                                     break  # stop processing siblings
                                                 else:  # title not visible, so we'll have to go down again and refresh the view structure and the selected view (because it's id may change)
                                                     self.bot.shell("input keyevent 20")
-                                                    time.sleep(0.1)
+                                                    time.sleep(0.2)
                                                     self.vc.dump()
                                                     views = self.vc.getViewsById()
                                                     for view_id in views:
@@ -310,12 +311,26 @@ class WeChatFeedMonitor:
                 article_key = (
                     f"{article_metadata['account']}:{article_metadata['title']}"
                 )
-                if article_key in self.seen_articles:
+                if (
+                    article_key in self.seen_articles
+                    and article_key not in self.seen_articles_this_run
+                ):  # we do not want to stop if we are simply on the same article again without it being actually old
                     self.logger.info("Article already seen, skipping")
                     break
 
+                if article_key in self.seen_articles_this_run:
+                    self.logger.info(
+                        "We're still on an article that we've seen before in this run, moving on..."
+                    )  # todo!: somethings's wrong here, we are always on the previous article it seems even though a single down key press should move us to the next article if the whole article is visible. Additionally, when the article should open, it doesn't, so we're probably either selecting some other view or not updating its bounds correctly
+                    self.bot.shell("input keyevent 20")
+                    time.sleep(0.2)
+                    self.vc.dump()
+                    views = self.vc.getViewsById()
+                    continue
+
                 # Open the article
                 # we cannot use selected_view.touch() for some reason, so we'll use the bounds of the view to tap
+                print(f"Tapping: {bounds(selected_view)}")
                 self.bot.click_bounds(selected_view.getBounds())
 
                 # Process the article
@@ -334,17 +349,21 @@ class WeChatFeedMonitor:
                 time.sleep(0.5)
 
                 # Mark as seen
-                article_key = (
-                    f"{article_metadata['account']}:{article_metadata['title']}"
-                )
-                self.seen_articles[article_key] = {
+                article_record = {
                     "timestamp": article_metadata["timestamp"],
                     "first_seen": time.time(),
                 }
+                article_key = (
+                    f"{article_metadata['account']}:{article_metadata['title']}"
+                )
+                self.seen_articles[article_key] = article_record
+                self.seen_articles_this_run[article_key] = article_record
                 self._save_seen_articles()
 
                 self.bot.shell("input keyevent 20")
-                time.sleep(0.1)
+                time.sleep(0.2)
+                self.vc.dump()
+                views = self.vc.getViewsById()
 
             # Return to WeChat home page
             self.bot.go_back()
