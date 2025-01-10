@@ -1,16 +1,31 @@
 ### This is a collection of code snippets etc. useful when developing, e.g. exploring the UI of the Android app
 
+from com.dtmilano.android.viewclient import ViewClient
+from dotenv import load_dotenv
+import os
 
-def get_view_structure(self):
-    self.vc.dump()
+load_dotenv()
+
+
+def get_view_structure():
+    serial = os.getenv("DEVICE_SERIAL")
+    if not serial:
+        raise ValueError("DEVICE_SERIAL is not set")
+
+    device, serialno = ViewClient.connectToDeviceOrExit(
+        serialno=os.getenv("DEVICE_SERIAL")
+    )
+
+    vc = ViewClient(device, serialno)
+    vc.dump()
 
     # First, collect all views into a map
-    views = self.vc.getViewsById()
+    views = vc.getViewsById()
     view_map = {}
 
     # First pass: collect all views and their properties
     for view_id in views:
-        view = self.vc.findViewById(view_id)
+        view = vc.findViewById(view_id)
         view_map[view_id] = {
             "id": view_id,
             "class": view.map.get("class", ""),
@@ -25,13 +40,13 @@ def get_view_structure(self):
     # Second pass: build parent-child relationships
     tree = {}
     for view_id in views:
-        view = self.vc.findViewById(view_id)
+        view = vc.findViewById(view_id)
         parent = view.getParent()
         if parent:
             parent_id = None
             # Find parent's id in our map
             for pid in view_map:
-                if self.vc.findViewById(pid) == parent:
+                if vc.findViewById(pid) == parent:
                     parent_id = pid
                     break
             if parent_id:
