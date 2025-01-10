@@ -2,7 +2,7 @@
 import time
 import json
 import os
-from com.dtmilano.android.viewclient import ViewClient
+from com.dtmilano.android.viewclient import ViewClient, AdbClient
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
 from core.robot import ADBRobot
@@ -25,6 +25,7 @@ class WeChatFeedMonitor:
         self.device, self.serialno = ViewClient.connectToDeviceOrExit(serialno=serial)
         self.vc = ViewClient(self.device, self.serialno)
         self.bot = ADBRobot(serial=serial, adb_path=adb_path)
+        self.adb_client = AdbClient(serialno=serial)
         self.seen_articles_file = "seen_articles.json"
         self._load_seen_articles()
 
@@ -59,8 +60,12 @@ class WeChatFeedMonitor:
         loop_index = 0
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
-            # Turn screen on
+            # Turn screen off and on again
+            self.bot.screen_off()
             self.bot.screen_on()
+
+            if os.getenv("PIN"):
+                self.bot.unlock()
 
             # Return to home screen
             self.bot.go_home()
@@ -259,70 +264,88 @@ class WeChatFeedMonitor:
 
     def feed_monitoring(self):
         """
-        Monitor subscription list, find updated subscriptions, enter each subscription and click latest links to copy to clipboard
+        Monitor subscription list, find updated subscriptions, enter each subscription and click latest links.
+        Uses a two-item-at-a-time scrolling pattern to process the feed efficiently.
         """
-        # Get list of recently updated subscriptions
-        newly_update_feed_list = self.get_feed_list_and_find_updates(set_new=True)
-        self.logger.info(
-            "Recently updated official accounts: {}".format(
-                [_["account"] for _ in newly_update_feed_list]
-            )
-        )
+        while True:
+            self.vc.dump()
+            # check if there is any element with the text "Show earlier messages"
+            show_earlier_messages = self.vc.findViewWithText("Show earlier messages")
+            if show_earlier_messages:
+                show_earlier_messages.touch()
+                time.sleep(0.5)
 
-        for feed_item in newly_update_feed_list:
-            # Enter subscription detail page
-            self.logger.info(
-                "Entering subscription [{}] detail page ...".format(
-                    feed_item["account"]
-                )
-            )
-            self.bot.click_bounds(feed_item["bounds"])
+            # Get the first two items in view
+            feed_items = self.get_feed_list()[:2]
+            if not feed_items:
+                self.logger.info("No more items found")
+                break
 
-            # Get latest article list for the subscription
-            feed_articles = self.get_feed_articles_in_account_page()
-            self.logger.info(
-                "Number of articles in latest article list: {}".format(
-                    len(feed_articles)
-                )
-            )
-
-            # Search latest article list for the subscription
-            for feed_article_item in feed_articles:
-                # Click article detail page
-                self.logger.debug("Entering article detail page ...")
-                self.bot.click_bounds(feed_article_item.bounds)
-                time.sleep(2)  # let the page load
-
-                # Click more
-                self.logger.debug("Clicking more ...")
-                more_button_bounds = self.bot.get_node_bounds(
-                    "content-desc",
-                    "更多",  # "More"
-                )  # "More"
-                if more_button_bounds:
-                    self.bot.click_bounds(more_button_bounds)
-                    time.sleep(2)  # let load
+            # Check if we've seen these items before
+            new_items = []
+            for feed_item in feed_items:
+                article_key = f"{feed_item['account']}:{feed_item['title']}"
+                if article_key not in self.seen_articles:
+                    new_items.append(feed_item)
                 else:
-                    self.logger.error("Cannot find more button, article issue?")
+                    # We've hit a seen article, stop processing
+                    self.logger.info("Found previously seen article, stopping")
+                    return
 
-                # Click copy link
-                self.logger.debug("Clicking copy link ...")
-                copy_link_btn_bounds = self.bot.get_node_bounds(
-                    "text",
-                    "复制链接",  # "Copy Link"
-                )  # "Copy Link"
-                if copy_link_btn_bounds:
-                    self.bot.click_bounds(copy_link_btn_bounds)
+            # Process new items
+            for index, feed_item in enumerate(new_items):
+                # Find and click the account name
+                title_views = self.vc.findViewsWithAttribute(
+                    "resource-id", "com.tencent.mm:id/ozs"
+                )
+                view = title_views[index]
+
+                runtime_id = view.getId()
+                target_view = self.vc.findViewById(runtime_id)
+                if target_view:
+                    target_view.touch()
+
+                    # Process the article
+                    print("Processing article [incomplete implementation]")
+                    time.sleep(0.5)
+
+                    # tap three dots button
+                    self.bot.tap(1000, 209)
+                    time.sleep(0.5)
+
+                    # tap copy link button
+                    self.bot.tap(850, 1960)
                     time.sleep(0.1)
 
-                    # Get clipboard content and output
-                    self.output_result(self.bot.get_clipboard_text())
-                else:
-                    self.logger.error("Cannot find copy link button, article issue?")
+                    self.bot.go_back()
+                    time.sleep(0.5)
 
-                self.logger.debug("Returning to subscription page ...")
-                self.bot.go_back()
-            self.bot.go_back()
+                # Mark as seen
+                article_key = f"{feed_item['account']}:{feed_item['title']}"
+                self.seen_articles[article_key] = {
+                    "timestamp": feed_item["timestamp"],
+                    "first_seen": time.time(),
+                }
+                self._save_seen_articles()
+
+            # Scroll down by the height of two items
+            # Get the bounds of the first and third items to calculate scroll distance
+            items = self.vc.findViewsWithAttribute(
+                "resource-id", "com.tencent.mm:id/aq0"
+            )
+            if len(items) >= 3:
+                first_item = items[0]
+                second_item = items[1]
+                scroll_distance = (
+                    second_item.getBounds()[0][1] - first_item.getBounds()[0][1]
+                )
+                self.bot.swipe_up_by_distance(
+                    scroll_distance
+                )  # Scroll down by the height of two items
+                time.sleep(0.5)  # Wait for scroll to complete
+            else:
+                # Not enough items to scroll, we're done
+                break
 
 
 def push_result(url):

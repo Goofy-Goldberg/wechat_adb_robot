@@ -4,6 +4,10 @@ import re
 import time
 from lxml import etree
 import subprocess
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("adb_robot")
 
@@ -82,6 +86,16 @@ class ADBRobot:
         if not self.is_screen_on():
             self.shell("input keyevent 26")
 
+    def unlock(self):
+        # adb shell input text XXXX && adb shell input keyevent 66
+        pin = os.getenv("PIN")
+        if not pin:
+            raise ValueError("PIN is not set")
+        self.shell("input keyevent 66")
+        self.shell("input text {}".format(pin))
+        self.shell("input keyevent 66")
+        time.sleep(0.25)
+
     def screen_off(self):
         if self.is_screen_on():
             self.shell("input keyevent 26")
@@ -130,6 +144,16 @@ class ADBRobot:
                 self.wm.height / 4 * 3,
                 self.wm.width / 2,
                 self.wm.height / 4,
+            )
+        )
+
+    def swipe_up_by_distance(self, distance):
+        self.shell(
+            "input swipe {} {} {} {}".format(
+                self.wm.width / 2,
+                self.wm.height - 100,  # start near bottom of screen
+                self.wm.width / 2,
+                self.wm.height - distance,
             )
         )
 
