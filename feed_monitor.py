@@ -16,13 +16,7 @@ class FeedArticleItem:
 
 def bounds(view):
     """
-    Convert bounds tuple ((left, top), (right, bottom)) to a dictionary
-
-    Args:
-        bounds: Tuple of format ((left, top), (right, bottom))
-
-    Returns:
-        dict: Contains left, top, right, bottom, width, and height values
+    Get the bounds of a view and return as a dictionary with left, top, right, bottom, width, and height values
     """
     bounds = view.getBounds()
     return {
@@ -70,6 +64,59 @@ class WeChatFeedMonitor:
         except Exception as e:
             self.logger.error(f"Error saving seen articles: {e}")
 
+    def _get_view_structure(self):
+        self.vc.dump()
+
+        # First, collect all views into a map
+        views = self.vc.getViewsById()
+        view_map = {}
+
+        # First pass: collect all views and their properties
+        for view_id in views:
+            view = self.vc.findViewById(view_id)
+            view_map[view_id] = {
+                "id": view_id,
+                "class": view.map.get("class", ""),
+                "text": view.map.get("text", ""),
+                "content-desc": view.map.get("content-desc", ""),
+                "resource-id": view.map.get("resource-id", ""),
+                "bounds": view.map.get("bounds", ""),
+                "children": [],
+                "parent": None,
+            }
+
+        # Second pass: build parent-child relationships
+        tree = {}
+        for view_id in views:
+            view = self.vc.findViewById(view_id)
+            parent = view.getParent()
+            if parent:
+                parent_id = None
+                # Find parent's id in our map
+                for pid in view_map:
+                    if self.vc.findViewById(pid) == parent:
+                        parent_id = pid
+                        break
+                if parent_id:
+                    view_map[view_id]["parent"] = parent_id
+                    view_map[parent_id]["children"].append(view_id)
+            else:
+                # This is a root node
+                tree[view_id] = view_map[view_id]
+
+        # Convert the tree to a nested dictionary structure
+        def build_dict_tree(node_id):
+            node = view_map[node_id].copy()
+            # Convert children array of IDs to array of nested nodes
+            children = node["children"]
+            node["children"] = [build_dict_tree(child_id) for child_id in children]
+            return node
+
+        # Build final tree structure
+        final_tree = {root_id: build_dict_tree(root_id) for root_id in tree}
+
+        return final_tree
+
     def run(self, skip_first_batch=True, sleep_interval=30):
         """
         Execute script in a loop
@@ -81,182 +128,203 @@ class WeChatFeedMonitor:
         loop_index = 0
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
-            # Turn screen off and on again
-            self.bot.screen_off()
-            self.bot.screen_on()
 
-            if os.getenv("PIN"):
-                self.bot.unlock()
+            # Check if skip navigation is not true
+            if (
+                not os.getenv("SKIP_NAVIGATION", "").lower() == "true"
+            ):  # useful for debugging to skip the long navigation, if you can ensure you're on the right page
+                # Turn screen off and on again
+                self.bot.screen_off()
+                self.bot.screen_on()
 
-            # Return to home screen
-            self.bot.go_home()
-            time.sleep(0.1)
+                if os.getenv("PIN"):
+                    self.bot.unlock()
 
-            # Open WeChat home page
-            self.ensure_wechat_front()
-            time.sleep(0.1)
+                # Return to home screen
+                self.bot.go_home()
+                time.sleep(0.1)
 
-            # Enter subscription page
-            self.go_feed_page()
-            time.sleep(0.1)
+                # Open WeChat home page
+                self.ensure_wechat_front()
+                time.sleep(0.1)
 
-            # Execute subscription list monitoring
+                # Enter subscription page
+                self.go_feed_page()
+                time.sleep(0.1)
+
+            # Loop through the feed items
+            processed_articles_username_ids = set()
+
+            self.vc.dump()
+            # check if there is any element with the text "Show earlier messages"
+            show_earlier_messages = self.vc.findViewWithText("Show earlier messages")
+            if show_earlier_messages:
+                show_earlier_messages.touch()
+                time.sleep(0.5)
+
+            # press arrow down key three times to navigate to the listing
+            for _ in range(3):
+                self.bot.shell("input keyevent 20")
+                time.sleep(0.1)
+
             while True:
+                # Refresh view structure
                 self.vc.dump()
-                # check if there is any element with the text "Show earlier messages"
-                show_earlier_messages = self.vc.findViewWithText(
-                    "Show earlier messages"
-                )
-                if show_earlier_messages:
-                    show_earlier_messages.touch()
-                    time.sleep(0.5)
+                views = self.vc.getViewsById()
 
-                # Get the first two items in view
-                feed_items = []
+                # Get header views
+                header_views = []
+                for view_id in views:
+                    aq0_view = self.vc.findViewById(view_id)
+                    if aq0_view.map[
+                        "resource-id"
+                    ].endswith(
+                        "axy"
+                    ):  # nb: axy refers to the username view in the feed item, not the feed item/article itself
+                        header_views.append(aq0_view)
 
-                self.vc.dump()
-                list_view = self.vc.findViewWithAttribute(
-                    "class", "android.widget.ListView"
-                )
-                if not list_view:
-                    self.logger.error("Cannot find ListView")
-
-                else:
-                    # Find all views by ID
-                    views = self.vc.getViewsById()
+                while True:  # loop until we navigate to an article
+                    selected_view = None
 
                     for view_id in views:
-                        view = self.vc.findViewById(view_id)
+                        aq0_view = self.vc.findViewById(view_id)
+                        if aq0_view.map["selected"] == "true":
+                            selected_view = aq0_view
+                            break
 
-                        # Find header containers
-                        if view.map.get("resource-id") == "com.tencent.mm:id/aq0":
-                            item = {}
+                    if selected_view:
+                        if selected_view.getId() != "com.tencent.mm:id/axy":
+                            print(
+                                f"selected view {selected_view.getId()} is not an article: moving down..."
+                            )
+                            self.bot.shell("input keyevent 20")
+                            time.sleep(0.1)
+                            self.vc.dump()
+                            views = self.vc.getViewsById()
+                        else:
+                            if (
+                                selected_view.getId()
+                                not in processed_articles_username_ids
+                            ):
+                                processed_articles_username_ids.add(
+                                    selected_view.getId()
+                                )
+                                break
+                            else:
+                                print(
+                                    f"still on {selected_view.getId()}, probably just shifted the whole article tile into view. Moving down..."
+                                )
+                                self.bot.shell("input keyevent 20")
+                                time.sleep(0.1)
+                                self.vc.dump()
+                                views = self.vc.getViewsById()
 
-                            # Recursive function to search through children
-                            def find_in_children(view, item):
-                                if view.map.get("resource-id", "").endswith("lu8"):
-                                    item["account"] = view.map.get("text", "")
-                                elif view.map.get("resource-id", "").endswith("qdv"):
-                                    item["timestamp"] = view.map.get("text", "")
+                            # todo: double check which article is selected using article_views - check the order using selected_view.getUniqueId()
 
-                                for child in view.getChildren():
-                                    find_in_children(child, item)
+                # view_structure = self._get_view_structure()
 
-                            # Search through this container's children
-                            find_in_children(view, item)
+                siblings = self.vc.findViewById(
+                    selected_view.parent.getUniqueId()
+                ).children
 
-                            # Look for title in next sibling container
-                            if "account" in item and "timestamp" in item:
-                                parent = view.getParent()
-                                if parent:
-                                    siblings = parent.getChildren()
-                                    found_current = False
-                                    for sibling in siblings:
-                                        if sibling == view:
-                                            found_current = True
-                                            continue
-                                        if found_current:
-                                            # Look for title in this container's children
-                                            def find_title(view):
-                                                if view.map.get(
-                                                    "resource-id", ""
-                                                ).endswith("ozs"):
-                                                    return view.map.get("text", "")
-                                                for child in view.getChildren():
-                                                    title = find_title(child)
-                                                    if title:
-                                                        return title
-                                                return None
+                # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
 
-                                            title = find_title(sibling)
-                                            if title:
-                                                item["title"] = title
-                                                break
+                found_current = False
+                aq0_view = None
 
-                                if item:
-                                    print(f"Found item: {item}")
-                                    feed_items.append(item)
+                for sibling in siblings:
+                    # check if we are on the selected view (axa)
+                    if sibling == selected_view:
+                        found_current = True
+                    elif found_current:
+                        if sibling.getId() == "com.tencent.mm:id/aq0":
+                            aq0_view = sibling
+                            break
 
-                feed_items = feed_items[:2]  # keep only the first two items
-
-                if not feed_items:
-                    self.logger.info("No more items found")
+                if not aq0_view:
+                    self.logger.error("Cannot find aq0 view")  # todo: handle better
                     break
 
-                # Check if we've seen these items before
-                new_items = []
-                for feed_item in feed_items:
-                    article_key = f"{feed_item['account']}:{feed_item['title']}"
-                    if article_key not in self.seen_articles:
-                        new_items.append(feed_item)
-                    else:
-                        # We've hit a seen article, stop processing
-                        self.logger.info("Found previously seen article, stopping")
-                        return
+                # Find header containers
+                article_metadata = {}
 
-                # Process new items
-                # for index, feed_item in enumerate(new_items):
-                #     # Find and click the account name
-                #     title_views = self.vc.findViewsWithAttribute(
-                #         "resource-id", "com.tencent.mm:id/ozs"
-                #     )
-                #     view = title_views[index]
+                # Recursive function to search through children
+                def find_in_children(view, article_metadata):
+                    if view.map.get("resource-id", "").endswith("lu8"):
+                        article_metadata["account"] = view.map.get("text", "")
+                    elif view.map.get("resource-id", "").endswith("qdv"):
+                        article_metadata["timestamp"] = view.map.get("text", "")
 
-                #     runtime_id = view.getId()
-                #     target_view = self.vc.findViewById(runtime_id)
-                #     if target_view:
-                #         target_view.touch()
+                    for child in view.getChildren():
+                        find_in_children(child, article_metadata)
 
-                #         # Process the article
-                #         print("Processing article [incomplete implementation]")
-                #         time.sleep(0.5)
+                # Search through this container's children
+                find_in_children(aq0_view, article_metadata)
 
-                #         # tap three dots button
-                #         self.bot.tap(1000, 209)
-                #         time.sleep(0.5)
+                # Look for title in next sibling container
+                if "account" in article_metadata and "timestamp" in article_metadata:
+                    parent = aq0_view.getParent()
+                    if parent:
+                        siblings = parent.getChildren()
+                        found_current = False
+                        for sibling in siblings:
+                            if sibling == aq0_view:
+                                found_current = True
+                                continue
+                            if found_current:
+                                # Look for title in this container's children
+                                def find_title(view):
+                                    if view.map.get("resource-id", "").endswith("ozs"):
+                                        return view.map.get("text", "")
+                                    for child in view.getChildren():
+                                        title = find_title(child)
+                                        if title:
+                                            return title
+                                    return None
 
-                #         # tap copy link button
-                #         self.bot.tap(850, 1960)
-                #         time.sleep(0.1)
+                                title = find_title(sibling)
+                                if title:
+                                    article_metadata["title"] = title
+                                    break
 
-                #         self.bot.go_back()
-                #         time.sleep(0.5)
+                    print(f"Found article: {article_metadata}")
 
-                #     # Mark as seen
-                #     article_key = f"{feed_item['account']}:{feed_item['title']}"
-                #     self.seen_articles[article_key] = {
-                #         "timestamp": feed_item["timestamp"],
-                #         "first_seen": time.time(),
-                #     }
-                #     self._save_seen_articles()
-
-                # note: scrolling is unreliable, we'll use the keyboard to jump
-
-                # # Scroll down by the height of two items
-                # # Get the bounds of the first and third items and the top point of the first item (in case there are other elements above) to calculate scroll distance
-                # username_views = self.vc.findViewsWithAttribute(
-                #     "resource-id", "com.tencent.mm:id/aq0"
-                # )
-                # title_views = self.vc.findViewsWithAttribute(
-                #     "resource-id", "com.tencent.mm:id/ozs"
-                # )
-
-                # first_username = username_views[0]
-                # second_title = title_views[1]
-                # self.bot.swipe_by_distance(
-                #     bounds(second_title)["bottom"] - bounds(first_username)["top"]
-                # )  # Scroll down by the height of two items
-                # time.sleep(0.5)  # Wait for scroll to complete
-
-                # press down key
-
-                # jump through axo views there are (frequently read profile titles)
-                frequently_read_title_views = self.vc.findViewsWithAttribute(
-                    "resource-id", "com.tencent.mm:id/axo"
+                # check if article in seen_articles
+                article_key = (
+                    f"{article_metadata['account']}:{article_metadata['title']}"
                 )
-                for frequently_read_title_view in frequently_read_title_views:
-                    self.bot.shell("input keyevent 20")
-                    time.sleep(0.1)
+                if article_key in self.seen_articles:
+                    self.logger.info("Article already seen, skipping")
+                    break
+
+                # Open the article
+                # we cannot use selected_view.touch() for some reason, so we'll use the bounds of the view to tap
+                self.bot.click_bounds(selected_view.getBounds())
+
+                # Process the article
+                print("Processing article [incomplete implementation]")
+                time.sleep(0.5)
+
+                # tap three dots button
+                self.bot.tap(1000, 209)
+                time.sleep(0.5)
+
+                # tap copy link button
+                self.bot.tap(850, 1960)
+                time.sleep(0.1)
+
+                self.bot.go_back()
+                time.sleep(0.5)
+
+                # Mark as seen
+                article_key = (
+                    f"{article_metadata['account']}:{article_metadata['title']}"
+                )
+                self.seen_articles[article_key] = {
+                    "timestamp": article_metadata["timestamp"],
+                    "first_seen": time.time(),
+                }
+                self._save_seen_articles()
 
                 self.bot.shell("input keyevent 20")
                 time.sleep(0.1)
@@ -340,35 +408,6 @@ class WeChatFeedMonitor:
                 self.logger.exception(f"Error parsing article item: {e}")
 
         return articles
-
-    # def get_feed_list_and_find_updates(self, set_new=True):
-    #     """
-    #     Get the first screen of subscription list and find updated subscription items
-    #     """
-    #     new_feed_list = self.get_feed_list()
-    #     result = []
-
-    #     for feed_item in new_feed_list:
-    #         try:
-    #             # Create a unique key for the article using account and title
-    #             article_key = f"{feed_item['account']}:{feed_item['title']}"
-
-    #             # Check if we've seen this article before
-    #             if article_key not in self.seen_articles:
-    #                 result.append(feed_item)
-    #                 if set_new:
-    #                     # Store the article with timestamp
-    #                     self.seen_articles[article_key] = {
-    #                         "timestamp": feed_item["timestamp"],
-    #                         "first_seen": time.time(),
-    #                     }
-    #         except Exception as e:  # at this point the likely error be that not the entire feed item is visible
-    #             self.logger.exception(f"Error processing feed item: {e}")
-
-    #     if set_new:
-    #         self._save_seen_articles()
-
-    #     return result
 
 
 def push_result(url):
