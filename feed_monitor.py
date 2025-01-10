@@ -14,6 +14,27 @@ class FeedArticleItem:
         self.bounds = node.xpath("@bounds")[0]
 
 
+def bounds(view):
+    """
+    Convert bounds tuple ((left, top), (right, bottom)) to a dictionary
+
+    Args:
+        bounds: Tuple of format ((left, top), (right, bottom))
+
+    Returns:
+        dict: Contains left, top, right, bottom, width, and height values
+    """
+    bounds = view.getBounds()
+    return {
+        "left": bounds[0][0],
+        "top": bounds[0][1],
+        "right": bounds[1][0],
+        "bottom": bounds[1][1],
+        "width": bounds[1][0] - bounds[0][0],
+        "height": bounds[1][1] - bounds[0][1],
+    }
+
+
 class WeChatFeedMonitor:
     def __init__(
         self, serial, result_callback=lambda x: x, adb_path="adb", logger=None
@@ -79,12 +100,166 @@ class WeChatFeedMonitor:
             self.go_feed_page()
             time.sleep(0.1)
 
-            if skip_first_batch and loop_index == 0:
-                # Save and skip the first captured subscription list
-                self.get_feed_list_and_find_updates(set_new=True)
-            else:
-                # Execute subscription list monitoring
-                self.feed_monitoring()
+            # Execute subscription list monitoring
+            while True:
+                self.vc.dump()
+                # check if there is any element with the text "Show earlier messages"
+                show_earlier_messages = self.vc.findViewWithText(
+                    "Show earlier messages"
+                )
+                if show_earlier_messages:
+                    show_earlier_messages.touch()
+                    time.sleep(0.5)
+
+                # Get the first two items in view
+                feed_items = []
+
+                self.vc.dump()
+                list_view = self.vc.findViewWithAttribute(
+                    "class", "android.widget.ListView"
+                )
+                if not list_view:
+                    self.logger.error("Cannot find ListView")
+
+                else:
+                    # Find all views by ID
+                    views = self.vc.getViewsById()
+
+                    for view_id in views:
+                        view = self.vc.findViewById(view_id)
+
+                        # Find header containers
+                        if view.map.get("resource-id") == "com.tencent.mm:id/aq0":
+                            item = {}
+
+                            # Recursive function to search through children
+                            def find_in_children(view, item):
+                                if view.map.get("resource-id", "").endswith("lu8"):
+                                    item["account"] = view.map.get("text", "")
+                                elif view.map.get("resource-id", "").endswith("qdv"):
+                                    item["timestamp"] = view.map.get("text", "")
+
+                                for child in view.getChildren():
+                                    find_in_children(child, item)
+
+                            # Search through this container's children
+                            find_in_children(view, item)
+
+                            # Look for title in next sibling container
+                            if "account" in item and "timestamp" in item:
+                                parent = view.getParent()
+                                if parent:
+                                    siblings = parent.getChildren()
+                                    found_current = False
+                                    for sibling in siblings:
+                                        if sibling == view:
+                                            found_current = True
+                                            continue
+                                        if found_current:
+                                            # Look for title in this container's children
+                                            def find_title(view):
+                                                if view.map.get(
+                                                    "resource-id", ""
+                                                ).endswith("ozs"):
+                                                    return view.map.get("text", "")
+                                                for child in view.getChildren():
+                                                    title = find_title(child)
+                                                    if title:
+                                                        return title
+                                                return None
+
+                                            title = find_title(sibling)
+                                            if title:
+                                                item["title"] = title
+                                                break
+
+                                if item:
+                                    print(f"Found item: {item}")
+                                    feed_items.append(item)
+
+                feed_items = feed_items[:2]  # keep only the first two items
+
+                if not feed_items:
+                    self.logger.info("No more items found")
+                    break
+
+                # Check if we've seen these items before
+                new_items = []
+                for feed_item in feed_items:
+                    article_key = f"{feed_item['account']}:{feed_item['title']}"
+                    if article_key not in self.seen_articles:
+                        new_items.append(feed_item)
+                    else:
+                        # We've hit a seen article, stop processing
+                        self.logger.info("Found previously seen article, stopping")
+                        return
+
+                # Process new items
+                # for index, feed_item in enumerate(new_items):
+                #     # Find and click the account name
+                #     title_views = self.vc.findViewsWithAttribute(
+                #         "resource-id", "com.tencent.mm:id/ozs"
+                #     )
+                #     view = title_views[index]
+
+                #     runtime_id = view.getId()
+                #     target_view = self.vc.findViewById(runtime_id)
+                #     if target_view:
+                #         target_view.touch()
+
+                #         # Process the article
+                #         print("Processing article [incomplete implementation]")
+                #         time.sleep(0.5)
+
+                #         # tap three dots button
+                #         self.bot.tap(1000, 209)
+                #         time.sleep(0.5)
+
+                #         # tap copy link button
+                #         self.bot.tap(850, 1960)
+                #         time.sleep(0.1)
+
+                #         self.bot.go_back()
+                #         time.sleep(0.5)
+
+                #     # Mark as seen
+                #     article_key = f"{feed_item['account']}:{feed_item['title']}"
+                #     self.seen_articles[article_key] = {
+                #         "timestamp": feed_item["timestamp"],
+                #         "first_seen": time.time(),
+                #     }
+                #     self._save_seen_articles()
+
+                # note: scrolling is unreliable, we'll use the keyboard to jump
+
+                # # Scroll down by the height of two items
+                # # Get the bounds of the first and third items and the top point of the first item (in case there are other elements above) to calculate scroll distance
+                # username_views = self.vc.findViewsWithAttribute(
+                #     "resource-id", "com.tencent.mm:id/aq0"
+                # )
+                # title_views = self.vc.findViewsWithAttribute(
+                #     "resource-id", "com.tencent.mm:id/ozs"
+                # )
+
+                # first_username = username_views[0]
+                # second_title = title_views[1]
+                # self.bot.swipe_by_distance(
+                #     bounds(second_title)["bottom"] - bounds(first_username)["top"]
+                # )  # Scroll down by the height of two items
+                # time.sleep(0.5)  # Wait for scroll to complete
+
+                # press down key
+
+                # jump through axo views there are (frequently read profile titles)
+                frequently_read_title_views = self.vc.findViewsWithAttribute(
+                    "resource-id", "com.tencent.mm:id/axo"
+                )
+                for frequently_read_title_view in frequently_read_title_views:
+                    self.bot.shell("input keyevent 20")
+                    time.sleep(0.1)
+
+                self.bot.shell("input keyevent 20")
+                time.sleep(0.1)
 
             # Return to WeChat home page
             self.bot.go_back()
@@ -137,73 +312,6 @@ class WeChatFeedMonitor:
             else:
                 self.logger.error("Cannot find subscription tab")
 
-    def get_feed_list(self):
-        """
-        Get the first screen of subscription list using ViewClient
-        """
-        self.vc.dump()
-        list_view = self.vc.findViewWithAttribute("class", "android.widget.ListView")
-        if not list_view:
-            self.logger.error("Cannot find ListView")
-            return []
-
-        feed_items = []
-
-        # Find all views by ID
-        views = self.vc.getViewsById()
-
-        for view_id in views:
-            view = self.vc.findViewById(view_id)
-
-            # Find header containers
-            if view.map.get("resource-id") == "com.tencent.mm:id/aq0":
-                item = {}
-
-                # Recursive function to search through children
-                def find_in_children(view, item):
-                    if view.map.get("resource-id", "").endswith("lu8"):
-                        item["account"] = view.map.get("text", "")
-                    elif view.map.get("resource-id", "").endswith("qdv"):
-                        item["timestamp"] = view.map.get("text", "")
-
-                    for child in view.getChildren():
-                        find_in_children(child, item)
-
-                # Search through this container's children
-                find_in_children(view, item)
-
-                # Look for title in next sibling container
-                if "account" in item and "timestamp" in item:
-                    parent = view.getParent()
-                    if parent:
-                        siblings = parent.getChildren()
-                        found_current = False
-                        for sibling in siblings:
-                            if sibling == view:
-                                found_current = True
-                                continue
-                            if found_current:
-                                # Look for title in this container's children
-                                def find_title(view):
-                                    if view.map.get("resource-id", "").endswith("ozs"):
-                                        return view.map.get("text", "")
-                                    for child in view.getChildren():
-                                        title = find_title(child)
-                                        if title:
-                                            return title
-                                    return None
-
-                                title = find_title(sibling)
-                                if title:
-                                    item["title"] = title
-                                    break
-
-                    if item:
-                        print(f"Found item: {item}")
-                        feed_items.append(item)
-
-        return feed_items
-
     def get_feed_articles_in_account_page(self):
         """
         Get the latest article list using ViewClient
@@ -233,119 +341,34 @@ class WeChatFeedMonitor:
 
         return articles
 
-    def get_feed_list_and_find_updates(self, set_new=True):
-        """
-        Get the first screen of subscription list and find updated subscription items
-        """
-        new_feed_list = self.get_feed_list()
-        result = []
+    # def get_feed_list_and_find_updates(self, set_new=True):
+    #     """
+    #     Get the first screen of subscription list and find updated subscription items
+    #     """
+    #     new_feed_list = self.get_feed_list()
+    #     result = []
 
-        for feed_item in new_feed_list:
-            try:
-                # Create a unique key for the article using account and title
-                article_key = f"{feed_item['account']}:{feed_item['title']}"
+    #     for feed_item in new_feed_list:
+    #         try:
+    #             # Create a unique key for the article using account and title
+    #             article_key = f"{feed_item['account']}:{feed_item['title']}"
 
-                # Check if we've seen this article before
-                if article_key not in self.seen_articles:
-                    result.append(feed_item)
-                    if set_new:
-                        # Store the article with timestamp
-                        self.seen_articles[article_key] = {
-                            "timestamp": feed_item["timestamp"],
-                            "first_seen": time.time(),
-                        }
-            except Exception as e:  # at this point the likely error be that not the entire feed item is visible
-                self.logger.exception(f"Error processing feed item: {e}")
+    #             # Check if we've seen this article before
+    #             if article_key not in self.seen_articles:
+    #                 result.append(feed_item)
+    #                 if set_new:
+    #                     # Store the article with timestamp
+    #                     self.seen_articles[article_key] = {
+    #                         "timestamp": feed_item["timestamp"],
+    #                         "first_seen": time.time(),
+    #                     }
+    #         except Exception as e:  # at this point the likely error be that not the entire feed item is visible
+    #             self.logger.exception(f"Error processing feed item: {e}")
 
-        if set_new:
-            self._save_seen_articles()
+    #     if set_new:
+    #         self._save_seen_articles()
 
-        return result
-
-    def feed_monitoring(self):
-        """
-        Monitor subscription list, find updated subscriptions, enter each subscription and click latest links.
-        Uses a two-item-at-a-time scrolling pattern to process the feed efficiently.
-        """
-        while True:
-            self.vc.dump()
-            # check if there is any element with the text "Show earlier messages"
-            show_earlier_messages = self.vc.findViewWithText("Show earlier messages")
-            if show_earlier_messages:
-                show_earlier_messages.touch()
-                time.sleep(0.5)
-
-            # Get the first two items in view
-            feed_items = self.get_feed_list()[:2]
-            if not feed_items:
-                self.logger.info("No more items found")
-                break
-
-            # Check if we've seen these items before
-            new_items = []
-            for feed_item in feed_items:
-                article_key = f"{feed_item['account']}:{feed_item['title']}"
-                if article_key not in self.seen_articles:
-                    new_items.append(feed_item)
-                else:
-                    # We've hit a seen article, stop processing
-                    self.logger.info("Found previously seen article, stopping")
-                    return
-
-            # Process new items
-            for index, feed_item in enumerate(new_items):
-                # Find and click the account name
-                title_views = self.vc.findViewsWithAttribute(
-                    "resource-id", "com.tencent.mm:id/ozs"
-                )
-                view = title_views[index]
-
-                runtime_id = view.getId()
-                target_view = self.vc.findViewById(runtime_id)
-                if target_view:
-                    target_view.touch()
-
-                    # Process the article
-                    print("Processing article [incomplete implementation]")
-                    time.sleep(0.5)
-
-                    # tap three dots button
-                    self.bot.tap(1000, 209)
-                    time.sleep(0.5)
-
-                    # tap copy link button
-                    self.bot.tap(850, 1960)
-                    time.sleep(0.1)
-
-                    self.bot.go_back()
-                    time.sleep(0.5)
-
-                # Mark as seen
-                article_key = f"{feed_item['account']}:{feed_item['title']}"
-                self.seen_articles[article_key] = {
-                    "timestamp": feed_item["timestamp"],
-                    "first_seen": time.time(),
-                }
-                self._save_seen_articles()
-
-            # Scroll down by the height of two items
-            # Get the bounds of the first and third items to calculate scroll distance
-            items = self.vc.findViewsWithAttribute(
-                "resource-id", "com.tencent.mm:id/aq0"
-            )
-            if len(items) >= 3:
-                first_item = items[0]
-                second_item = items[1]
-                scroll_distance = (
-                    second_item.getBounds()[0][1] - first_item.getBounds()[0][1]
-                )
-                self.bot.swipe_up_by_distance(
-                    scroll_distance
-                )  # Scroll down by the height of two items
-                time.sleep(0.5)  # Wait for scroll to complete
-            else:
-                # Not enough items to scroll, we're done
-                break
+    #     return result
 
 
 def push_result(url):

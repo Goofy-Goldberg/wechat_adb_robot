@@ -64,10 +64,10 @@ class ADBRobot:
         return stdout
 
     def wm_shell(self, wm_cmd=""):
-        return self.shell("wm {}".format(wm_cmd))
+        return self.shell(f"wm {wm_cmd}")
 
     def is_app_installed(self, app_name):
-        return len(self.shell("pm list packages | grep {}".format(app_name))) > 0
+        return len(self.shell(f"pm list packages | grep {app_name}")) > 0
 
     def run_app(self, app_name):
         """
@@ -91,8 +91,15 @@ class ADBRobot:
         pin = os.getenv("PIN")
         if not pin:
             raise ValueError("PIN is not set")
+        # repeat 66 three times with a small delay to ensure we get to the pin input
         self.shell("input keyevent 66")
-        self.shell("input text {}".format(pin))
+        time.sleep(0.25)
+        self.shell("input keyevent 66")
+        time.sleep(0.25)
+        self.shell("input keyevent 66")
+        time.sleep(0.25)
+        # enter pin
+        self.shell(f"input text {pin}")
         self.shell("input keyevent 66")
         time.sleep(0.25)
 
@@ -147,13 +154,17 @@ class ADBRobot:
             )
         )
 
-    def swipe_up_by_distance(self, distance):
+    def swipe_by_distance(self, distance):
+        """
+        Swipe by distance - negative distance is up, positive is down
+        """
         self.shell(
             "input swipe {} {} {} {}".format(
                 self.wm.width / 2,
-                self.wm.height - 100,  # start near bottom of screen
+                self.wm.height
+                - 300,  # start near bottom of screen to avoid triggering gestures
                 self.wm.width / 2,
-                self.wm.height - distance,
+                self.wm.height - distance - 300,
             )
         )
 
