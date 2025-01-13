@@ -154,7 +154,7 @@ class ADBRobot:
             )
         )
 
-    def swipe_by_distance(self, distance):
+    def swipe_vertical_by_distance(self, distance):
         """
         Swipe by distance - negative distance is up, positive is down
         """
@@ -167,6 +167,52 @@ class ADBRobot:
                 self.wm.height - distance - 300,
             )
         )
+
+    def swipe(
+        self, start_x=None, start_y=None, end_x=None, end_y=None, dx=None, dy=None
+    ):
+        """
+        Swipe from a start point to an end point, or by a distance. If start
+        point is not provided, it will swipe from the center of the screen. If end point is not provided, it will swipe by a distance.
+        Either endpoint or distance must be provided. If only one of dx or dy is provided, the other will be set to 0.
+        """
+        if start_x is None:
+            start_x = self.wm.width / 2
+        if start_y is None:
+            start_y = self.wm.height / 2
+
+        # now ensure the required parameters are provided
+        if start_x is not None and start_y is None:
+            raise ValueError("start_y missing")
+        if start_y is not None and start_x is None:
+            raise ValueError("start_x missing")
+        if end_x is not None and end_y is None:
+            raise ValueError("end_y missing")
+        if end_y is not None and end_x is None:
+            raise ValueError("end_x missing")
+        if end_x is None and dx is None:
+            raise ValueError(
+                "Either end point (start_x, start_y) or distance (dx, dy) must be provided"
+            )
+        if end_x is not None and dx is not None:
+            raise ValueError("end_x and dx cannot be provided together")
+        if end_y is not None and dy is not None:
+            raise ValueError("end_y and dy cannot be provided together")
+
+        # now do the actual swiping
+        if end_x is not None:
+            self.shell("input swipe {} {} {} {}".format(start_x, start_y, end_x, end_y))
+
+        if dx is not None or dy is not None:
+            if dy is None:
+                dy = 0
+            if dx is None:
+                dx = 0
+            self.shell(
+                "input swipe {} {} {} {}".format(
+                    start_x, start_y, start_x + dx, start_y + dy
+                )
+            )
 
     def uidump_and_get_node(self, retry_times=3):
         """
@@ -216,19 +262,25 @@ class ADBRobot:
         points = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]").match(bounds).groups()
         return list(map(int, points))
 
-    def click_bounds(self, bounds):
+    def tap_bounds(self, bounds):
         """
-        bounds = '[42,1023][126,1080]'
+        Useful for tapping on views that don't have a touch() method.
+
+        Bounds can be either a tuple produced by .getBounds(), e.g. ((22, 1651), (1058, 1694)), or a string like '[42,1023][126,1080]'. In any case, the coordinates are left, top, right, bottom.
         """
         # check if bounds is tuple
         if isinstance(bounds, tuple):
-            self.tap(bounds[0][0] + bounds[1][0] / 2, bounds[0][1] + bounds[1][1] / 2)
+            left, top = bounds[0]
+            right, bottom = bounds[1]
+            center_x = (left + right) // 2
+            center_y = (top + bottom) // 2
+            self.tap(center_x, center_y)
         else:
             bounds_points = self.get_points_in_bounds(bounds)
-            self.tap(
-                (bounds_points[0] + bounds_points[2]) / 2,
-                (bounds_points[1] + bounds_points[3]) / 2,
-            )
+            left, top, right, bottom = bounds_points
+            center_x = (left + right) // 2
+            center_y = (top + bottom) // 2
+            self.tap(center_x, center_y)
 
     def set_clipboard_text(self, text):
         """

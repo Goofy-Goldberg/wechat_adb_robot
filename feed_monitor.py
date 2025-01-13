@@ -156,6 +156,7 @@ class WeChatFeedMonitor:
             # Loop through the feed items
 
             self.vc.dump()
+
             # check if there is any element with the text "Show earlier messages"
             show_earlier_messages = self.vc.findViewWithText("Show earlier messages")
             if show_earlier_messages:
@@ -163,25 +164,30 @@ class WeChatFeedMonitor:
                 time.sleep(0.5)
 
             # press arrow down key three times to navigate to the listing
-            for _ in range(3):
+            for i in range(3):
+                self.logger.info(
+                    f"Initial navigation: Pressing down arrow key ({i+1}/3)"
+                )
                 self.bot.shell("input keyevent 20")
                 time.sleep(0.1)
 
+            # Refresh view structure
+            self.logger.info("Dumping view structure")
+            self.vc.dump()
+
             while True:
-                # Refresh view structure
-                self.vc.dump()
                 views = self.vc.getViewsById()
 
-                # Get header views
-                header_views = []
-                for view_id in views:
-                    view = self.vc.findViewById(view_id)
-                    if view.map[
-                        "resource-id"
-                    ].endswith(
-                        "axy"
-                    ):  # nb: axy refers to the username view in the feed item, not the feed item/article itself
-                        header_views.append(view)
+                # # Get header views
+                # header_views = []
+                # for view_id in views:
+                #     view = self.vc.findViewById(view_id)
+                #     if view.map[
+                #         "resource-id"
+                #     ].endswith(
+                #         "axy"
+                #     ):  # nb: axy refers to the username view in the feed item, not the feed item/article itself
+                #         header_views.append(view)
 
                 article_ready_to_process = False
 
@@ -198,15 +204,21 @@ class WeChatFeedMonitor:
 
                     if selected_view:
                         if selected_view.getId() != "com.tencent.mm:id/axy":
-                            print(
+                            self.logger.info(
                                 f"selected view {selected_view.getId()} is not an article: moving down..."
+                            )
+                            self.logger.info(
+                                "Navigation: Pressing down arrow key to find article"
                             )
                             self.bot.shell("input keyevent 20")
                             time.sleep(0.2)
+                            self.logger.info("Dumping view structure after navigation")
                             self.vc.dump()
                             views = self.vc.getViewsById()
                         else:
                             # now we are on the article, or rather on the account name view (axy). We'll get the metadata now.
+
+                            self.logger.info("Getting article metadata")
 
                             metadata_complete = False  # if the title isn't fully visible, we'll have go down again... there doesn't seem to be a more elegant way of testing this though
 
@@ -272,29 +284,42 @@ class WeChatFeedMonitor:
                                                 continue
                                             if found_current:
                                                 # Look for title in this container's children
-                                                def find_title(view):
-                                                    if view.map.get(
-                                                        "resource-id", ""
-                                                    ).endswith("ozs"):
-                                                        return view.map.get("text", "")
+                                                def find_title_view(view):
+                                                    if (
+                                                        view.map.get(
+                                                            "resource-id", ""
+                                                        ).endswith("ozs")
+                                                        or view.map.get(
+                                                            "resource-id", ""
+                                                        ).endswith("qkk")
+                                                    ):  # ozs for regular title, qkk for a title with a secondary small thumbnail
+                                                        return view
                                                     for child in view.getChildren():
-                                                        title = find_title(child)
+                                                        title = find_title_view(child)
                                                         if title:
                                                             return title
                                                     return None
 
-                                                title = find_title(sibling)
-                                                if title:
+                                                title_view = find_title_view(sibling)
+                                                if title_view:
                                                     metadata_complete = True
-                                                    article_metadata["title"] = title
-                                                    print(
+                                                    article_metadata["title"] = (
+                                                        title_view.getText()
+                                                    )
+                                                    self.logger.info(
                                                         f"Found article: {article_metadata}"
                                                     )
                                                     article_ready_to_process = True
                                                     break  # stop processing siblings
-                                                else:  # title not visible, so we'll have to go down again and refresh the view structure and the selected view (because it's id may change)
+                                                else:  # title not visible, so we'll have to go down again
+                                                    self.logger.info(
+                                                        "Navigation: Pressing down arrow key to reveal full title"
+                                                    )
                                                     self.bot.shell("input keyevent 20")
                                                     time.sleep(0.2)
+                                                    self.logger.info(
+                                                        "Dumping view structure after navigation"
+                                                    )
                                                     self.vc.dump()
                                                     views = self.vc.getViewsById()
                                                     for view_id in views:
@@ -322,19 +347,22 @@ class WeChatFeedMonitor:
                     self.logger.info(
                         "We're still on an article that we've seen before in this run, moving on..."
                     )  # todo!: somethings's wrong here, we are always on the previous article it seems even though a single down key press should move us to the next article if the whole article is visible. Additionally, when the article should open, it doesn't, so we're probably either selecting some other view or not updating its bounds correctly
+                    self.logger.info(
+                        "Navigation: Pressing down arrow key to move to next article"
+                    )
                     self.bot.shell("input keyevent 20")
                     time.sleep(0.2)
+                    self.logger.info("Dumping view structure after navigation")
                     self.vc.dump()
                     views = self.vc.getViewsById()
                     continue
 
                 # Open the article
-                # we cannot use selected_view.touch() for some reason, so we'll use the bounds of the view to tap
-                print(f"Tapping: {bounds(selected_view)}")
-                self.bot.click_bounds(selected_view.getBounds())
+                self.logger.info("Opening article")
+                title_view.touch()
 
                 # Process the article
-                print("Processing article [incomplete implementation]")
+                self.logger.info("Processing article [incomplete implementation]")
                 time.sleep(0.5)
 
                 # tap three dots button
@@ -343,6 +371,10 @@ class WeChatFeedMonitor:
 
                 # tap copy link button
                 self.bot.tap(850, 1960)
+                time.sleep(0.3)
+
+                # swipe to dismiss the clipboard popup
+                self.bot.swipe(start_x=250, start_y=2220, dx=-100)
                 time.sleep(0.1)
 
                 self.bot.go_back()
@@ -360,8 +392,16 @@ class WeChatFeedMonitor:
                 self.seen_articles_this_run[article_key] = article_record
                 self._save_seen_articles()
 
+                # move to next article
+
+                self.logger.info(
+                    "Navigation: Pressing down arrow key twice to move to next article (once to activate the selection, once to move to the next article)"
+                )
+                self.bot.shell("input keyevent 20")
+                time.sleep(0.1)
                 self.bot.shell("input keyevent 20")
                 time.sleep(0.2)
+                self.logger.info("Dumping view structure after navigation")
                 self.vc.dump()
                 views = self.vc.getViewsById()
 
@@ -447,7 +487,7 @@ class WeChatFeedMonitor:
 
 
 def push_result(url):
-    print("Got new article url:", url)
+    self.logger.info("Got new article url:", url)
 
 
 if __name__ == "__main__":
