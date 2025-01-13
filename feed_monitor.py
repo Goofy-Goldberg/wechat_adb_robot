@@ -6,6 +6,7 @@ from com.dtmilano.android.viewclient import ViewClient, AdbClient
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
 from core.robot import ADBRobot
+import pyperclip
 
 
 class FeedArticleItem:
@@ -174,6 +175,8 @@ class WeChatFeedMonitor:
             # Refresh view structure
             self.logger.info("Dumping view structure")
             self.vc.dump()
+
+            clipboard = None  # initialise clipboard - useful to compare with previously copied text to ensure we got the latest URL copied
 
             while True:
                 views = self.vc.getViewsById()
@@ -365,13 +368,46 @@ class WeChatFeedMonitor:
                 self.logger.info("Processing article [incomplete implementation]")
                 time.sleep(0.5)
 
+                got_url = False
+
                 # tap three dots button
                 self.bot.tap(1000, 209)
-                time.sleep(0.5)
+                time.sleep(0.1)
 
-                # tap copy link button
-                self.bot.tap(850, 1960)
-                time.sleep(0.3)
+                def copy_link(retry=3):
+                    while retry > 0:
+                        # tap three dots button
+                        self.bot.tap(1000, 209)
+                        time.sleep(0.1)
+
+                        self.vc.dump()
+                        # find the copy link button
+                        copy_link_button = self.vc.findViewWithText("Copy Link")
+                        if not copy_link_button:
+                            self.logger.error(
+                                "Cannot find copy link button, trying to tap the three dots again"
+                            )
+                            retry -= 1
+                        else:
+                            copy_link_button.touch()
+                            time.sleep(0.3)
+
+                            # if scrcpy is running, it should synchronise the clipboard. There might be a way to do this directly through adb. For now, we have to access the computer's clipboard.
+                            return pyperclip.paste()
+
+                while not got_url:
+                    clipboard_new = copy_link()
+
+                    self.logger.info(f"Clipboard: {clipboard_new}")
+
+                    if not clipboard_new.startswith("https://"):
+                        self.logger.error("Clipboard does not contain a valid URL")
+                    elif clipboard_new != clipboard:
+                        article_metadata["url"] = clipboard_new
+                        clipboard = clipboard_new
+                        got_url = True
+                    else:
+                        self.logger.info("Clipboard did not change, retrying...")
 
                 # swipe to dismiss the clipboard popup
                 self.bot.swipe(start_x=250, start_y=2220, dx=-100)
@@ -382,8 +418,11 @@ class WeChatFeedMonitor:
 
                 # Mark as seen
                 article_record = {
+                    "account": article_metadata["account"],
+                    "title": article_metadata["title"],
                     "timestamp": article_metadata["timestamp"],
                     "first_seen": time.time(),
+                    "url": article_metadata["url"],
                 }
                 article_key = (
                     f"{article_metadata['account']}:{article_metadata['title']}"
