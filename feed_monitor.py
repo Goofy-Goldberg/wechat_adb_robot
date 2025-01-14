@@ -31,11 +31,8 @@ def bounds(view):
 
 
 class WeChatFeedMonitor:
-    def __init__(
-        self, serial, result_callback=lambda x: x, adb_path="adb", logger=None
-    ):
+    def __init__(self, serial, adb_path="adb", logger=None):
         self.serial = serial
-        self.result_callback = result_callback
         self.adb_path = adb_path
         self.logger = logger or new_stream_logger()
         self.device, self.serialno = ViewClient.connectToDeviceOrExit(serialno=serial)
@@ -374,8 +371,13 @@ class WeChatFeedMonitor:
                 self.bot.tap(1000, 209)
                 time.sleep(0.1)
 
-                def copy_link(retry=3):
+                def copy_link(retry=10):
+                    base_sleep = 0.1
+                    attempt = 0
                     while retry > 0:
+                        # Exponential backoff sleep
+                        sleep_time = base_sleep * (2**attempt)
+
                         # tap three dots button
                         self.bot.tap(1000, 209)
                         time.sleep(0.1)
@@ -385,9 +387,11 @@ class WeChatFeedMonitor:
                         copy_link_button = self.vc.findViewWithText("Copy Link")
                         if not copy_link_button:
                             self.logger.error(
-                                "Cannot find copy link button, trying to tap the three dots again"
+                                f"Cannot find copy link button, trying to tap the three dots again (attempt {attempt + 1}, sleeping {sleep_time:.2f}s)"
                             )
+                            time.sleep(sleep_time)
                             retry -= 1
+                            attempt += 1
                         else:
                             copy_link_button.touch()
                             time.sleep(0.3)
@@ -397,6 +401,10 @@ class WeChatFeedMonitor:
 
                 while not got_url:
                     clipboard_new = copy_link()
+
+                    if not clipboard_new:
+                        self.logger.error("Cannot find copy link button, retrying...")
+                        raise Exception("Cannot find copy link button")
 
                     self.logger.info(f"Clipboard: {clipboard_new}")
 
@@ -525,10 +533,6 @@ class WeChatFeedMonitor:
         return articles
 
 
-def push_result(url):
-    self.logger.info("Got new article url:", url)
-
-
 if __name__ == "__main__":
     load_dotenv()
 
@@ -538,7 +542,6 @@ if __name__ == "__main__":
 
     monitor = WeChatFeedMonitor(
         serial=device_serial,
-        result_callback=push_result,
         adb_path="adb",
         logger=new_stream_logger(),
     )
