@@ -72,3 +72,7 @@ def get_view_structure():
 
     json_tree = json.dumps(final_tree, indent=2, ensure_ascii=False)
     print(json_tree)
+
+
+if __name__ == "__main__":
+    get_view_structure()

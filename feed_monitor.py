@@ -1,12 +1,12 @@
 # coding:utf-8
 import time
-import json
 import os
 from com.dtmilano.android.viewclient import ViewClient, AdbClient
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
 from core.robot import ADBRobot
 import pyperclip
+from lib.db import ArticleDB
 
 
 class FeedArticleItem:
@@ -39,29 +39,9 @@ class WeChatFeedMonitor:
         self.vc = ViewClient(self.device, self.serialno)
         self.bot = ADBRobot(serial=serial, adb_path=adb_path)
         self.adb_client = AdbClient(serialno=serial)
-        self.seen_articles_file = "articles.json"
-        self._load_seen_articles()
+        self.db = ArticleDB()
+        self.seen_articles = self.db.get_all_articles()
         self.seen_articles_this_run = {}
-
-    def _load_seen_articles(self):
-        """Load previously seen articles from JSON file"""
-        try:
-            if os.path.exists(self.seen_articles_file):
-                with open(self.seen_articles_file, "r") as f:
-                    self.seen_articles = json.load(f)
-            else:
-                self.seen_articles = {}
-        except Exception as e:
-            self.logger.error(f"Error loading seen articles: {e}")
-            self.seen_articles = {}
-
-    def _save_seen_articles(self):
-        """Save seen articles to JSON file"""
-        try:
-            with open(self.seen_articles_file, "w") as f:
-                json.dump(self.seen_articles, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            self.logger.error(f"Error saving seen articles: {e}")
 
     def _get_view_structure(self):
         self.vc.dump()
@@ -130,7 +110,6 @@ class WeChatFeedMonitor:
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
-            loop_start_time = time.time()
 
             # Check if we've hit the article limit
             if max_articles > 0 and articles_collected >= max_articles:
@@ -215,7 +194,24 @@ class WeChatFeedMonitor:
 
             # Article loop - go through all articles in the feed
             while True:
-                # now we are on the article, or rather on the account name view (axy). We'll get the metadata now.
+                # Check for "articles(s) remainig"
+                # loop through all views and check if there is a view with the text "articles(s) remainig"
+                articles_remaining_view = None
+                for view_id in views:
+                    view = self.vc.findViewById(view_id)
+                    if (
+                        view.map.get("text", "")
+                        .lower()
+                        .endswith("articles(s) remainig")
+                    ):
+                        self.logger.info("Found 'articles(s) remainig'")
+                        break
+
+                if articles_remaining_view:
+                    articles_remaining_view.touch()
+                    time.sleep(0.5)
+
+                # now we should be on the article, or rather on the account name view (axy). We'll get the metadata now.
 
                 selected_view = get_selected_view(views)
 
@@ -231,18 +227,18 @@ class WeChatFeedMonitor:
                     # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
 
                     found_current = False
-                    view = None
+                    view_aq0 = None
 
                     for sibling in siblings:
                         # check if we are on the selected view (axa)
                         if sibling == selected_view:
                             found_current = True
-                        elif found_current:
+                        elif found_current:  # the previous sibling was the selected view (axa), so we're on the next sibling, which should be aq0
                             if sibling.getId() == "com.tencent.mm:id/aq0":
-                                view = sibling
+                                view_aq0 = sibling
                                 break
 
-                    if not view:
+                    if not view_aq0:
                         self.logger.error("Cannot find aq0 view")  # todo: handle better
                         break
 
@@ -260,19 +256,19 @@ class WeChatFeedMonitor:
                             find_in_children(child, article_metadata)
 
                     # Search through this container's children
-                    find_in_children(view, article_metadata)
+                    find_in_children(view_aq0, article_metadata)
 
                     # Look for title in next sibling container
                     if (
                         "account" in article_metadata
                         and "timestamp" in article_metadata
                     ):
-                        parent = view.getParent()
+                        parent = view_aq0.getParent()
                         if parent:
                             siblings = parent.getChildren()
                             found_current = False
                             for sibling in siblings:
-                                if sibling == view:
+                                if sibling == view_aq0:
                                     found_current = True
                                     continue
                                 if found_current:
@@ -303,19 +299,26 @@ class WeChatFeedMonitor:
                                         break  # stop processing siblings
                                     else:  # title not visible, so we'll have to go down again
                                         self.logger.info(
-                                            "Navigation: Pressing down arrow key to reveal full title"
+                                            "Navigation: Pressing down arrow key to reveal full title and up again"
                                         )
+                                        self.bot.shell("input keyevent 20")
+                                        time.sleep(0.2)
+                                        # press arrow up to go back
+                                        self.bot.shell("input keyevent 19")
+                                        time.sleep(0.2)
                                         self.bot.shell("input keyevent 20")
                                         time.sleep(0.2)
                                         self.logger.info(
                                             "Dumping view structure after navigation"
                                         )
+                                        # refresh view info
                                         self.vc.dump()
                                         views = self.vc.getViewsById()
+                                        selected_view = get_selected_view(views)
                                         for view_id in views:
-                                            view = self.vc.findViewById(view_id)
-                                            if view.map["selected"] == "true":
-                                                selected_view = view
+                                            view_aq0 = self.vc.findViewById(view_id)
+                                            if view_aq0.map["selected"] == "true":
+                                                selected_view = view_aq0
 
                 # check if article in seen_articles
                 article_key = (
@@ -339,7 +342,7 @@ class WeChatFeedMonitor:
                 title_view.touch()
 
                 # Process the article
-                self.logger.info("Processing article [incomplete implementation]")
+                self.logger.info("Processing article...")
                 time.sleep(0.5)
 
                 got_url = False
@@ -412,9 +415,16 @@ class WeChatFeedMonitor:
                 article_key = (
                     f"{article_metadata['account']}:{article_metadata['title']}"
                 )
-                self.seen_articles[article_key] = article_record
-                self.seen_articles_this_run[article_key] = article_record
-                self._save_seen_articles()
+
+                # Add to database and update local cache
+                if self.db.add_article(
+                    article_metadata["account"],
+                    article_metadata["title"],
+                    article_metadata["timestamp"],
+                    article_metadata["url"],
+                ):
+                    self.seen_articles[article_key] = article_record
+                    self.seen_articles_this_run[article_key] = article_record
 
                 articles_collected += 1
                 if max_articles > 0:
