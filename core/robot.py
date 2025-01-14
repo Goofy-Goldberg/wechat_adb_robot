@@ -69,7 +69,10 @@ class ADBRobot:
     def is_app_installed(self, app_name):
         return len(self.shell(f"pm list packages | grep {app_name}")) > 0
 
-    def run_app(self, app_name):
+    def kill_app(self, app_name="com.tencent.mm"):
+        self.shell(f"am force-stop {app_name}")
+
+    def run_app(self, app_name="com.tencent.mm"):
         """
         app_name = "com.tencent.mm"
         """

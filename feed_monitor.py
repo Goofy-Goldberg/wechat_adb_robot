@@ -127,6 +127,7 @@ class WeChatFeedMonitor:
         max_articles = int(os.getenv("MAX_ARTICLES", "0"))  # 0 means no limit
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
+        # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
             loop_start_time = time.time()
@@ -157,9 +158,24 @@ class WeChatFeedMonitor:
                 self.go_feed_page()
                 time.sleep(0.1)
 
-            # Loop through the feed items
-
             self.vc.dump()
+
+            # Double tap the header to scroll up to the top of the feed
+            feed_header = self.vc.findViewWithText("Subscription Account Messages")
+            if feed_header:
+                feed_header.touch()
+                time.sleep(0.1)
+                feed_header.touch()
+            else:
+                self.logger.warning(
+                    "Cannot find feed header, scrolling up using 50 arrow up presses..."
+                )
+                # press arrow up key 50 times
+                for i in range(50):
+                    self.bot.shell("input keyevent 19")
+                    time.sleep(0.1)
+
+            # Loop through the feed items
 
             # check if there is any element with the text "Show earlier messages"
             show_earlier_messages = self.vc.findViewWithText("Show earlier messages")
@@ -167,13 +183,29 @@ class WeChatFeedMonitor:
                 show_earlier_messages.touch()
                 time.sleep(0.5)
 
-            # press arrow down key three times to navigate to the listing
-            for i in range(3):
-                self.logger.info(
-                    f"Initial navigation: Pressing down arrow key ({i+1}/3)"
-                )
+            views = None
+            selected_view = None
+
+            def get_selected_view(views):
+                for view_id in views:
+                    view = self.vc.findViewById(view_id)
+                    if view.map["selected"] == "true":
+                        return view
+                return None
+
+            # keep pressing the down arrow key until we've navigated to an article
+            self.logger.info("Navigating to the first article...")
+
+            while True:
                 self.bot.shell("input keyevent 20")
                 time.sleep(0.1)
+                self.vc.dump()
+                views = self.vc.getViewsById()
+                selected_view = get_selected_view(views)
+
+                if selected_view and selected_view.getId() == "com.tencent.mm:id/axy":
+                    self.logger.info("Found article")
+                    break
 
             # Refresh view structure
             self.logger.info("Dumping view structure")
@@ -181,162 +213,109 @@ class WeChatFeedMonitor:
 
             clipboard = None  # initialise clipboard - useful to compare with previously copied text to ensure we got the latest URL copied
 
+            # Article loop - go through all articles in the feed
             while True:
-                views = self.vc.getViewsById()
+                # now we are on the article, or rather on the account name view (axy). We'll get the metadata now.
 
-                # # Get header views
-                # header_views = []
-                # for view_id in views:
-                #     view = self.vc.findViewById(view_id)
-                #     if view.map[
-                #         "resource-id"
-                #     ].endswith(
-                #         "axy"
-                #     ):  # nb: axy refers to the username view in the feed item, not the feed item/article itself
-                #         header_views.append(view)
+                selected_view = get_selected_view(views)
 
-                article_ready_to_process = False
+                self.logger.info("Getting article metadata")
 
-                while (
-                    not article_ready_to_process
-                ):  # loop until we navigate to an article
-                    selected_view = None
+                metadata_complete = False  # if the title isn't fully visible, we'll have go down again... there doesn't seem to be a more elegant way of testing this though
 
-                    for view_id in views:
-                        view = self.vc.findViewById(view_id)
-                        if view.map["selected"] == "true":
-                            selected_view = view
-                            break
+                while not metadata_complete:
+                    siblings = self.vc.findViewById(
+                        selected_view.parent.getUniqueId()
+                    ).children
 
-                    if selected_view:
-                        if selected_view.getId() != "com.tencent.mm:id/axy":
-                            self.logger.info(
-                                f"selected view {selected_view.getId()} is not an article: moving down..."
-                            )
-                            self.logger.info(
-                                "Navigation: Pressing down arrow key to find article"
-                            )
-                            self.bot.shell("input keyevent 20")
-                            time.sleep(0.2)
-                            self.logger.info("Dumping view structure after navigation")
-                            self.vc.dump()
-                            views = self.vc.getViewsById()
-                        else:
-                            # now we are on the article, or rather on the account name view (axy). We'll get the metadata now.
+                    # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
 
-                            self.logger.info("Getting article metadata")
+                    found_current = False
+                    view = None
 
-                            metadata_complete = False  # if the title isn't fully visible, we'll have go down again... there doesn't seem to be a more elegant way of testing this though
+                    for sibling in siblings:
+                        # check if we are on the selected view (axa)
+                        if sibling == selected_view:
+                            found_current = True
+                        elif found_current:
+                            if sibling.getId() == "com.tencent.mm:id/aq0":
+                                view = sibling
+                                break
 
-                            while not metadata_complete:
-                                siblings = self.vc.findViewById(
-                                    selected_view.parent.getUniqueId()
-                                ).children
+                    if not view:
+                        self.logger.error("Cannot find aq0 view")  # todo: handle better
+                        break
 
-                                # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
+                    # Find header containers
+                    article_metadata = {}
 
-                                found_current = False
-                                view = None
+                    # Recursive function to search through children
+                    def find_in_children(view, article_metadata):
+                        if view.map.get("resource-id", "").endswith("lu8"):
+                            article_metadata["account"] = view.map.get("text", "")
+                        elif view.map.get("resource-id", "").endswith("qdv"):
+                            article_metadata["timestamp"] = view.map.get("text", "")
 
-                                for sibling in siblings:
-                                    # check if we are on the selected view (axa)
-                                    if sibling == selected_view:
-                                        found_current = True
-                                    elif found_current:
-                                        if sibling.getId() == "com.tencent.mm:id/aq0":
-                                            view = sibling
-                                            break
+                        for child in view.getChildren():
+                            find_in_children(child, article_metadata)
 
-                                if not view:
-                                    self.logger.error(
-                                        "Cannot find aq0 view"
-                                    )  # todo: handle better
-                                    break
+                    # Search through this container's children
+                    find_in_children(view, article_metadata)
 
-                                # Find header containers
-                                article_metadata = {}
+                    # Look for title in next sibling container
+                    if (
+                        "account" in article_metadata
+                        and "timestamp" in article_metadata
+                    ):
+                        parent = view.getParent()
+                        if parent:
+                            siblings = parent.getChildren()
+                            found_current = False
+                            for sibling in siblings:
+                                if sibling == view:
+                                    found_current = True
+                                    continue
+                                if found_current:
+                                    # Look for title in this container's children
+                                    def find_title_view(view):
+                                        if (
+                                            view.map.get("resource-id", "").endswith(
+                                                "ozs"
+                                            )
+                                            or view.map.get("resource-id", "").endswith(
+                                                "qkk"
+                                            )
+                                        ):  # ozs for regular title, qkk for a title with a secondary small thumbnail
+                                            return view
+                                        for child in view.getChildren():
+                                            title = find_title_view(child)
+                                            if title:
+                                                return title
+                                        return None
 
-                                # Recursive function to search through children
-                                def find_in_children(view, article_metadata):
-                                    if view.map.get("resource-id", "").endswith("lu8"):
-                                        article_metadata["account"] = view.map.get(
-                                            "text", ""
+                                    title_view = find_title_view(sibling)
+                                    if title_view:
+                                        metadata_complete = True
+                                        article_metadata["title"] = title_view.getText()
+                                        self.logger.info(
+                                            f"Found article: {article_metadata}"
                                         )
-                                    elif view.map.get("resource-id", "").endswith(
-                                        "qdv"
-                                    ):
-                                        article_metadata["timestamp"] = view.map.get(
-                                            "text", ""
+                                        break  # stop processing siblings
+                                    else:  # title not visible, so we'll have to go down again
+                                        self.logger.info(
+                                            "Navigation: Pressing down arrow key to reveal full title"
                                         )
-
-                                    for child in view.getChildren():
-                                        find_in_children(child, article_metadata)
-
-                                # Search through this container's children
-                                find_in_children(view, article_metadata)
-
-                                # Look for title in next sibling container
-                                if (
-                                    "account" in article_metadata
-                                    and "timestamp" in article_metadata
-                                ):
-                                    parent = view.getParent()
-                                    if parent:
-                                        siblings = parent.getChildren()
-                                        found_current = False
-                                        for sibling in siblings:
-                                            if sibling == view:
-                                                found_current = True
-                                                continue
-                                            if found_current:
-                                                # Look for title in this container's children
-                                                def find_title_view(view):
-                                                    if (
-                                                        view.map.get(
-                                                            "resource-id", ""
-                                                        ).endswith("ozs")
-                                                        or view.map.get(
-                                                            "resource-id", ""
-                                                        ).endswith("qkk")
-                                                    ):  # ozs for regular title, qkk for a title with a secondary small thumbnail
-                                                        return view
-                                                    for child in view.getChildren():
-                                                        title = find_title_view(child)
-                                                        if title:
-                                                            return title
-                                                    return None
-
-                                                title_view = find_title_view(sibling)
-                                                if title_view:
-                                                    metadata_complete = True
-                                                    article_metadata["title"] = (
-                                                        title_view.getText()
-                                                    )
-                                                    self.logger.info(
-                                                        f"Found article: {article_metadata}"
-                                                    )
-                                                    article_ready_to_process = True
-                                                    break  # stop processing siblings
-                                                else:  # title not visible, so we'll have to go down again
-                                                    self.logger.info(
-                                                        "Navigation: Pressing down arrow key to reveal full title"
-                                                    )
-                                                    self.bot.shell("input keyevent 20")
-                                                    time.sleep(0.2)
-                                                    self.logger.info(
-                                                        "Dumping view structure after navigation"
-                                                    )
-                                                    self.vc.dump()
-                                                    views = self.vc.getViewsById()
-                                                    for view_id in views:
-                                                        view = self.vc.findViewById(
-                                                            view_id
-                                                        )
-                                                        if (
-                                                            view.map["selected"]
-                                                            == "true"
-                                                        ):
-                                                            selected_view = view
+                                        self.bot.shell("input keyevent 20")
+                                        time.sleep(0.2)
+                                        self.logger.info(
+                                            "Dumping view structure after navigation"
+                                        )
+                                        self.vc.dump()
+                                        views = self.vc.getViewsById()
+                                        for view_id in views:
+                                            view = self.vc.findViewById(view_id)
+                                            if view.map["selected"] == "true":
+                                                selected_view = view
 
                 # check if article in seen_articles
                 article_key = (
@@ -345,23 +324,15 @@ class WeChatFeedMonitor:
                 if (
                     article_key in self.seen_articles
                     and article_key not in self.seen_articles_this_run
-                ):  # we do not want to stop if we are simply on the same article again without it being actually old
-                    self.logger.info("Article already seen, skipping")
-                    break
+                ):
+                    self.logger.info("Article already seen, ending collection")
+                    break  # Break the article loop, continue with main loop
 
                 if article_key in self.seen_articles_this_run:
                     self.logger.info(
-                        "We're still on an article that we've seen before in this run, moving on..."
-                    )  # todo!: somethings's wrong here, we are always on the previous article it seems even though a single down key press should move us to the next article if the whole article is visible. Additionally, when the article should open, it doesn't, so we're probably either selecting some other view or not updating its bounds correctly
-                    self.logger.info(
-                        "Navigation: Pressing down arrow key to move to next article"
+                        "Reached previously seen article in this run - we've hit the end of the feed. Ending collection."
                     )
-                    self.bot.shell("input keyevent 20")
-                    time.sleep(0.2)
-                    self.logger.info("Dumping view structure after navigation")
-                    self.vc.dump()
-                    views = self.vc.getViewsById()
-                    continue
+                    break  # Break the article loop, continue with main loop
 
                 # Open the article
                 self.logger.info("Opening article")
@@ -454,7 +425,7 @@ class WeChatFeedMonitor:
                         self.logger.info(
                             "Maximum article limit reached, ending collection"
                         )
-                        return
+                        break  # Break the article loop, continue with main loop
 
                 # move to next article
 
@@ -469,6 +440,7 @@ class WeChatFeedMonitor:
                 self.vc.dump()
                 views = self.vc.getViewsById()
 
+            # After breaking from article loop, these cleanup steps will run:
             # Return to WeChat home page
             self.bot.go_back()
 
@@ -481,31 +453,34 @@ class WeChatFeedMonitor:
 
             loop_index += 1
 
-            # Apply collection timeout if specified
-            if collection_timeout > 0:
-                elapsed_time = time.time() - loop_start_time
-                if elapsed_time < collection_timeout:
-                    timeout_sleep = collection_timeout - elapsed_time
-                    self.logger.info(
-                        f"Waiting {timeout_sleep:.1f}s before next collection loop"
-                    )
-                    time.sleep(timeout_sleep)
+            # Apply collection timeout
+            self.logger.info(
+                f"Waiting {collection_timeout:.1f}s before next collection loop"
+            )
+            time.sleep(collection_timeout)
 
     def ensure_wechat_front(self):
         """
-        Ensure WeChat is in foreground and on home page using ViewClient
+        Ensure WeChat is in foreground and on home page by killing the app if it's already running and starting it again
         """
-        self.bot.run_app("com.tencent.mm")
+        # kill the app if it's already running
+        self.logger.info("Killing WeChat app")
+        self.bot.kill_app()
         time.sleep(0.1)
 
-        # Wait for WeChat to be in foreground
+        # start the app
+        self.logger.info("Starting WeChat app")
+        self.bot.run_app()
+        time.sleep(0.1)
+
+        # Wait for WeChat to load
+        self.logger.info("Waiting for WeChat to load")
         self.vc.dump()
         while not self.vc.findViewWithText("WeChat"):
-            self.bot.go_back()
             time.sleep(0.1)
             self.vc.dump()
 
-        self.bot.run_app("com.tencent.mm")
+        self.bot.run_app()
 
     def go_feed_page(self):
         """
