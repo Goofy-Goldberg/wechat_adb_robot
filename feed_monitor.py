@@ -39,7 +39,7 @@ class WeChatFeedMonitor:
         self.vc = ViewClient(self.device, self.serialno)
         self.bot = ADBRobot(serial=serial, adb_path=adb_path)
         self.adb_client = AdbClient(serialno=serial)
-        self.seen_articles_file = "seen_articles.json"
+        self.seen_articles_file = "articles.json"
         self._load_seen_articles()
         self.seen_articles_this_run = {}
 
@@ -116,22 +116,28 @@ class WeChatFeedMonitor:
 
         return final_tree
 
-    def run(self, skip_first_batch=True, sleep_interval=30):
+    def run(self, skip_first_batch=True):
         """
         Execute script in a loop
         Due to WeChat's mechanism, the subscription page won't update if kept static
         So this script simulates human behavior by turning screen on/off, which works well in practice
-        :param skip_first_batch: Whether to save and skip the first captured subscription list
-        :param sleep_interval: Screen off duration
         """
         loop_index = 0
+        articles_collected = 0
+        max_articles = int(os.getenv("MAX_ARTICLES", "0"))  # 0 means no limit
+        collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
+
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
+            loop_start_time = time.time()
 
-            # Check if skip navigation is not true
-            if (
-                not os.getenv("SKIP_NAVIGATION", "").lower() == "true"
-            ):  # useful for debugging to skip the long navigation, if you can ensure you're on the right page
+            # Check if we've hit the article limit
+            if max_articles > 0 and articles_collected >= max_articles:
+                self.logger.info(f"Reached maximum article limit of {max_articles}")
+                break
+
+            # Check if skip app opening is not true - useful for debugging to skip the long navigation to the feed page, if you can ensure you're on the right page
+            if not os.getenv("SKIP_APP_OPENING", "").lower() == "true":
                 # Turn screen off and on again
                 self.bot.screen_off()
                 self.bot.screen_on()
@@ -439,6 +445,17 @@ class WeChatFeedMonitor:
                 self.seen_articles_this_run[article_key] = article_record
                 self._save_seen_articles()
 
+                articles_collected += 1
+                if max_articles > 0:
+                    self.logger.info(
+                        f"Collected {articles_collected}/{max_articles} articles"
+                    )
+                    if articles_collected >= max_articles:
+                        self.logger.info(
+                            "Maximum article limit reached, ending collection"
+                        )
+                        return
+
                 # move to next article
 
                 self.logger.info(
@@ -463,7 +480,16 @@ class WeChatFeedMonitor:
             self.bot.screen_off()
 
             loop_index += 1
-            time.sleep(sleep_interval)
+
+            # Apply collection timeout if specified
+            if collection_timeout > 0:
+                elapsed_time = time.time() - loop_start_time
+                if elapsed_time < collection_timeout:
+                    timeout_sleep = collection_timeout - elapsed_time
+                    self.logger.info(
+                        f"Waiting {timeout_sleep:.1f}s before next collection loop"
+                    )
+                    time.sleep(timeout_sleep)
 
     def ensure_wechat_front(self):
         """
