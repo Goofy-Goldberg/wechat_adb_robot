@@ -180,7 +180,9 @@ class WeChatFeedMonitor:
         """
         loop_index = 0
         articles_collected = 0
-        max_articles = int(os.getenv("MAX_ARTICLES", "0"))  # 0 means no limit
+        max_articles = int(
+            os.getenv("MAX_ARTICLES", "0")
+        )  # 0 means no limit - depending on the flow, it's either the number of articles to collect in total (for the feed) or the number of articles to collect in each profile (for profiles)
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
@@ -550,6 +552,11 @@ class WeChatFeedMonitor:
 
                         self.logger.info(f"Timestamp: {article.timestamp}")
 
+                        def go_back_to_profiles():
+                            self.bot.go_back()
+                            time.sleep(0.1)
+                            self.vc.dump()
+
                         # Check if we should process this article
                         if (
                             article.key in self.seen_articles
@@ -558,24 +565,32 @@ class WeChatFeedMonitor:
                             self.logger.info(
                                 "Article already seen, moving to next profile"
                             )
-                            profile_done = True
-                            continue
+                            go_back_to_profiles()
+                            break
 
                         if article.key in self.seen_articles_this_run:
                             self.logger.info(
                                 "Reached previously seen article in this run, moving to next profile"
                             )
-                            profile_done = True
-                            continue
+                            go_back_to_profiles()
+                            break
 
                         # Get the article URL
-                        article.url = self.process_article(focused_view)
-                        time.sleep(0.1)
+                        try:
+                            article.url = self.process_article(focused_view)
+                            time.sleep(0.1)
 
-                        # Store the article
-                        if self.db.add_article(**article.to_dict()):
-                            self.seen_articles[article.key] = article
-                            self.seen_articles_this_run[article.key] = article
+                            # Store the article immediately after getting URL
+                            if self.db.add_article(**article.to_dict()):
+                                self.seen_articles[article.key] = article
+                                self.logger.info("Article added to database.")
+                            else:
+                                self.logger.info(
+                                    "Article already exists in database (duplicate URL), skipping"
+                                )
+                        except Exception as e:
+                            self.logger.error(f"Error processing article: {e}")
+                            # Continue with next article even if this one fails
 
                         # Update collection count
                         articles_collected_in_profile += 1
@@ -587,7 +602,8 @@ class WeChatFeedMonitor:
                                 self.logger.info(
                                     f"Maximum article limit reached, ending collection for this profile ({username})"
                                 )
-                                return  # Exit the entire collection process
+                                go_back_to_profiles()
+                                break
 
                         # go back to the profiles list
                         self.bot.go_back()

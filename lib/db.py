@@ -21,7 +21,7 @@ class ArticleDB:
                     title TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     first_seen REAL NOT NULL,
-                    url TEXT NOT NULL,
+                    url TEXT NOT NULL UNIQUE,
                     UNIQUE(account, title)
                 )
             """)
@@ -45,19 +45,20 @@ class ArticleDB:
         first_seen: float = None,
     ) -> bool:
         """Add an article to the database if it doesn't exist"""
-        if self.article_exists(account, title):
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO articles (account, title, timestamp, first_seen, url)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (account, title, timestamp, first_seen or time(), url),
+                )
+                return True
+        except sqlite3.IntegrityError:
+            # Article already exists (either duplicate URL or account+title combination)
             return False
-
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO articles (account, title, timestamp, first_seen, url)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (account, title, timestamp, first_seen or time(), url),
-            )
-            return True
 
     def article_exists(self, account, title):
         """Check if an article exists in the database"""
