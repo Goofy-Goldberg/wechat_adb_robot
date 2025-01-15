@@ -1,6 +1,8 @@
 import sqlite3
 import time
 from contextlib import contextmanager
+from typing import Optional
+from .article import Article
 
 
 class ArticleDB:
@@ -34,23 +36,28 @@ class ArticleDB:
         finally:
             conn.close()
 
-    def add_article(self, account, title, timestamp, url):
-        """Add a new article to the database"""
+    def add_article(
+        self,
+        account: str,
+        title: str,
+        timestamp: str,
+        url: str,
+        first_seen: float = None,
+    ) -> bool:
+        """Add an article to the database if it doesn't exist"""
+        if self.article_exists(account, title):
+            return False
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO articles (account, title, timestamp, first_seen, url)
-                    VALUES (?, ?, ?, ?, ?)
+            cursor.execute(
+                """
+                INSERT INTO articles (account, title, timestamp, first_seen, url)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                    (account, title, timestamp, time.time(), url),
-                )
-                conn.commit()
-                return True
-            except sqlite3.IntegrityError:
-                # Article already exists
-                return False
+                (account, title, timestamp, first_seen or time(), url),
+            )
+            return True
 
     def article_exists(self, account, title):
         """Check if an article exists in the database"""
@@ -65,7 +72,7 @@ class ArticleDB:
             )
             return cursor.fetchone()[0] > 0
 
-    def get_article(self, account, title):
+    def get_article(self, account: str, title: str) -> Optional[Article]:
         """Get article details from the database"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -74,18 +81,18 @@ class ArticleDB:
                 SELECT account, title, timestamp, first_seen, url 
                 FROM articles 
                 WHERE account = ? AND title = ?
-            """,
+                """,
                 (account, title),
             )
             row = cursor.fetchone()
             if row:
-                return {
-                    "account": row[0],
-                    "title": row[1],
-                    "timestamp": row[2],
-                    "first_seen": row[3],
-                    "url": row[4],
-                }
+                return Article(
+                    account=row[0],
+                    title=row[1],
+                    timestamp=row[2],
+                    first_seen=row[3],
+                    url=row[4],
+                )
             return None
 
     def get_all_articles(self):

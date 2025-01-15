@@ -8,6 +8,8 @@ from core.robot import ADBRobot
 import pyperclip
 from lib.db import ArticleDB
 from lib.scrcpy import manage_scrcpy
+from lib.article import Article
+from datetime import datetime, timedelta
 
 
 class FeedArticleItem:
@@ -41,7 +43,10 @@ class WeChatFeedMonitor:
         self.bot = ADBRobot(serial=serial, adb_path=adb_path)
         self.adb_client = AdbClient(serialno=serial)
         self.db = ArticleDB()
-        self.seen_articles = self.db.get_all_articles()
+        self.seen_articles = {
+            article.key: article
+            for article in map(Article.from_dict, self.db.get_all_articles().values())
+        }
         self.seen_articles_this_run = {}
         self.clipboard = None
 
@@ -112,10 +117,6 @@ class WeChatFeedMonitor:
         time.sleep(0.5)
 
         got_url = False
-
-        # tap three dots button
-        self.bot.tap(1000, 209)
-        time.sleep(0.1)
 
         def copy_link(retry=10):
             base_sleep = 0.1
@@ -299,18 +300,12 @@ class WeChatFeedMonitor:
                     #     time.sleep(0.1)
 
                     # now we should be on the article, or rather on the account name view (axy). We'll get the metadata now.
-
-                    selected_view = get_selected_view(views)
-
                     self.logger.info("Getting article metadata")
 
-                    article_metadata = {}
+                    # Create new Article instance instead of metadata dictionary
+                    article = Article(account=None, title=None)
 
-                    while "title" not in article_metadata:
-                        # find the username (lu8), timestamp (qdv) and title (ozs or qkk) and add them to the article_metadata dictionary
-
-                        # note: it would be great if we could simply get the parent of the selected view, but for some reason the parent is the whole ListView with all the articles, even if the first selected axy view is displayed as under a LinearLayout in Appium Inspector
-
+                    while not article.title:
                         # find selected views
                         selected_views = []
                         views = self.vc.getViewsById()
@@ -319,73 +314,54 @@ class WeChatFeedMonitor:
                             if view.map.get("selected", "false") == "true":
                                 selected_views.append(view)
 
+                        # find the username (lu8), and title (ozs or qkk) and add them to the article
+                        # todo: parse timestamps (qdv) - but since they are like 2 hrs ago, they are not that useful
                         for selected_view in selected_views:
                             if selected_view.map.get("resource-id", "").endswith("lu8"):
-                                article_metadata["account"] = selected_view.map.get(
-                                    "text", ""
-                                )
+                                article.account = selected_view.map.get("text", "")
                             elif selected_view.map.get("resource-id", "").endswith(
                                 "ozs"
                             ) or selected_view.map.get("resource-id", "").endswith(
                                 "qkk"
                             ):
-                                article_metadata["title"] = selected_view.map.get(
-                                    "text", ""
-                                )
+                                article.title = selected_view.map.get("text", "")
                             elif selected_view.map.get("resource-id", "").endswith(
                                 "mtd"
                             ):
                                 thumbnail_view = selected_view
 
-                        if "title" not in article_metadata:
+                        if not article.title:
                             self.logger.info(
                                 "Navigation: Pressing down arrow key to reveal full title and up again"
                             )
                             self.bot.shell("input keyevent 20")
                             time.sleep(0.2)
-                            # # press arrow up to go back
-                            # self.bot.shell("input keyevent 19")
-                            # time.sleep(0.2)
-                            # self.bot.shell("input keyevent 20")
-                            # time.sleep(0.2)
                             self.logger.info("Dumping view structure after navigation")
-                            # refresh view info
                             self.vc.dump()
 
-                    self.logger.info(f"Found article metadata: {article_metadata}")
+                    self.logger.info(f"Found article metadata: {article}")
 
                     # check if article in seen_articles
-                    article_key = (
-                        f"{article_metadata['account']}:{article_metadata['title']}"
-                    )
                     if (
-                        article_key in self.seen_articles
-                        and article_key not in self.seen_articles_this_run
+                        article.key in self.seen_articles
+                        and article.key not in self.seen_articles_this_run
                     ):
                         self.logger.info("Article already seen, ending collection")
                         break  # Break the article loop, continue with main loop
 
-                    if article_key in self.seen_articles_this_run:
+                    if article.key in self.seen_articles_this_run:
                         self.logger.info(
                             "Reached previously seen article in this run - we've hit the end of the feed. Ending collection."
                         )
                         break  # Break the article loop, continue with main loop
 
-                    # Open the article
-                    article_metadata["url"] = self.process_article(thumbnail_view)
+                    # Open the article and get URL
+                    article.url = self.process_article(thumbnail_view)
 
                     # Add to database and update local cache
-                    if self.db.add_article(
-                        article_metadata["account"],
-                        article_metadata["title"],
-                        article_metadata["timestamp"],
-                        article_metadata["url"],
-                    ):
-                        article_key = (
-                            f"{article_metadata['account']}:{article_metadata['title']}"
-                        )
-                        self.seen_articles[article_key] = article_metadata
-                        self.seen_articles_this_run[article_key] = article_metadata
+                    if self.db.add_article(**article.to_dict()):
+                        self.seen_articles[article.key] = article
+                        self.seen_articles_this_run[article.key] = article
 
                     articles_collected += 1
                     if max_articles > 0:
@@ -449,43 +425,36 @@ class WeChatFeedMonitor:
                 for (
                     username
                 ) in usernames:  # todo!: scroll when visible usernames are exhausted
+                    articles_collected_in_profile = 0
+
                     profile_item = self.vc.findViewWithText(username)
                     profile_item.touch()
                     time.sleep(0.1)
 
-                    username = usernames[i]
-
                     # we are on the articles list now
 
-                    # first we press down, up, down, down to select the newest (lowest) article
-                    self.bot.shell("input keyevent 20")
-                    time.sleep(0.1)
-                    self.bot.shell("input keyevent 19")
-                    time.sleep(0.1)
-                    self.bot.shell("input keyevent 20")
-                    time.sleep(0.1)
-                    self.bot.shell("input keyevent 20")
-                    time.sleep(0.1)
-                    self.vc.dump()
+                    def go_to_first_article():
+                        # first we press down, up, down, down to select the newest (lowest) article
+                        self.bot.shell("input keyevent 20")
+                        time.sleep(0.1)
+                        self.bot.shell("input keyevent 19")
+                        time.sleep(0.1)
+                        self.bot.shell("input keyevent 20")
+                        time.sleep(0.1)
+                        self.bot.shell("input keyevent 20")
+                        time.sleep(0.1)
+                        self.vc.dump()
+
+                    go_to_first_article()
 
                     profile_done = False
 
-                    articles_by_username = {}
-
                     while not profile_done:
-                        # now let's get the article metadata
-                        article_metadata = {
-                            "account": username,  # We already have the account name
-                            "title": None,
-                            "timestamp": None,
-                            "first_seen": time.time(),
-                            "url": None,
-                        }
+                        # Create article with required fields
+                        article = Article(account=username, title=None)
 
-                        # find the focused element (where focused = true)
+                        # find the focused element
                         focused_view = self.vc.findViewWithAttribute("focused", "true")
-                        if focused_view:
-                            self.logger.info(f"Focused view: {focused_view.map}")
 
                         # find the title (com.tencent.mm:id/qit) in children recursively
                         def find_title(view):
@@ -500,33 +469,91 @@ class WeChatFeedMonitor:
                                     return result
                             return None
 
-                        article_metadata["title"] = find_title(focused_view)
-                        self.logger.info(f"Title: {article_metadata.get('title')}")
+                        article.title = find_title(focused_view)
+                        self.logger.info(f"Title: {article.title}")
 
-                        # find the timestamp
-                        siblings = focused_view.parent.children
-                        for sibling in siblings:
-                            if (
-                                sibling.map.get("resource-id", "")
-                                == "com.tencent.mm:id/c3b"
-                            ):
-                                article_metadata["timestamp"] = sibling.map.get(
-                                    "text", ""
-                                )
-                                break
+                        def get_timestamp(focused_view):
+                            # find the timestamp
+                            siblings = focused_view.parent.children
+                            for sibling in siblings:
+                                if (
+                                    sibling.map.get("resource-id", "")
+                                    == "com.tencent.mm:id/c3b"
+                                ):
+                                    timestamp_string = sibling.map.get("text", "")
+                                    # Parse different timestamp formats:
+                                    # - "2:09 PM" (today)
+                                    # - "Yesterday 2:09 PM"
+                                    # - "Mon 2:09 PM" (within last week)
+                                    # - "1/11/25 2:09 PM" (older articles)
+                                    try:
+                                        if "Yesterday" in timestamp_string:
+                                            # Remove "Yesterday " prefix and parse as today, then subtract one day
+                                            time_part = timestamp_string.replace(
+                                                "Yesterday ", ""
+                                            )
+                                            today_time = datetime.strptime(
+                                                time_part, "%I:%M %p"
+                                            ).time()
+                                            return datetime.combine(
+                                                datetime.now().date(), today_time
+                                            ) - timedelta(days=1)
+                                        elif "/" in timestamp_string:
+                                            # Full date format
+                                            return datetime.strptime(
+                                                timestamp_string, "%m/%d/%y %I:%M %p"
+                                            )
+                                        elif any(
+                                            day in timestamp_string
+                                            for day in [
+                                                "Mon",
+                                                "Tue",
+                                                "Wed",
+                                                "Thu",
+                                                "Fri",
+                                                "Sat",
+                                                "Sun",
+                                            ]
+                                        ):
+                                            # Day of week format
+                                            return datetime.strptime(
+                                                timestamp_string, "%a %I:%M %p"
+                                            )
+                                        else:
+                                            # Today's time only
+                                            today_time = datetime.strptime(
+                                                timestamp_string, "%I:%M %p"
+                                            ).time()
+                                            return datetime.combine(
+                                                datetime.now().date(), today_time
+                                            )
+                                    except ValueError:
+                                        self.logger.error(
+                                            f"Failed to parse timestamp: {timestamp_string}"
+                                        )
+                                    break
 
-                        self.logger.info(
-                            f"Timestamp: {article_metadata.get('timestamp')}"
-                        )
+                        timestamp = get_timestamp(focused_view)
+                        if not timestamp:
+                            # go up and down to reveal the timestamp
+                            self.bot.shell("input keyevent 19")
+                            time.sleep(0.1)
+                            self.bot.shell("input keyevent 20")
+                            time.sleep(0.1)
+                            self.vc.dump()
+                            focused_view = self.vc.findViewWithAttribute(
+                                "focused", "true"
+                            )
+                            timestamp = get_timestamp(focused_view)
+
+                        article.timestamp = timestamp
+
+                        self.logger.info(f"Timestamp: {article.timestamp}")
 
                         # Check if we should process this article
-                        article_key = (
-                            f"{article_metadata['account']}:{article_metadata['title']}"
-                        )
-
                         if (
-                            article_key in self.seen_articles
-                            and article_key not in self.seen_articles_this_run
+                            article.key in self.seen_articles
+                            and article.key not in self.seen_articles_this_run
                         ):
                             self.logger.info(
                                 "Article already seen, moving to next profile"
@@ -534,7 +561,7 @@ class WeChatFeedMonitor:
                             profile_done = True
                             continue
 
-                        if article_key in self.seen_articles_this_run:
+                        if article.key in self.seen_articles_this_run:
                             self.logger.info(
                                 "Reached previously seen article in this run, moving to next profile"
                             )
@@ -542,40 +569,43 @@ class WeChatFeedMonitor:
                             continue
 
                         # Get the article URL
-                        article_metadata["url"] = self.process_article(focused_view)
+                        article.url = self.process_article(focused_view)
                         time.sleep(0.1)
 
                         # Store the article
-                        if self.db.add_article(
-                            article_metadata["account"],
-                            article_metadata["title"],
-                            article_metadata["timestamp"],
-                            article_metadata["url"],
-                        ):
-                            self.seen_articles[article_key] = article_metadata
-                            self.seen_articles_this_run[article_key] = article_metadata
+                        if self.db.add_article(**article.to_dict()):
+                            self.seen_articles[article.key] = article
+                            self.seen_articles_this_run[article.key] = article
 
                         # Update collection count
-                        articles_collected += 1
+                        articles_collected_in_profile += 1
                         if max_articles > 0:
                             self.logger.info(
-                                f"Collected {articles_collected}/{max_articles} articles"
+                                f"Collected {articles_collected_in_profile}/{max_articles} articles in profile {username}"
                             )
-                            if articles_collected >= max_articles:
+                            if articles_collected_in_profile >= max_articles:
                                 self.logger.info(
-                                    "Maximum article limit reached, ending collection"
+                                    f"Maximum article limit reached, ending collection for this profile ({username})"
                                 )
                                 return  # Exit the entire collection process
 
-                        # navigate up
-                        self.bot.shell("input keyevent 19")
+                        # go back to the profiles list
+                        self.bot.go_back()
                         time.sleep(0.1)
                         self.vc.dump()
-
-                    # go back to the profiles list
-                    self.bot.go_back()
-                    time.sleep(0.1)
-                    self.vc.dump()
+                        # click on the username again
+                        profile_item = self.vc.findViewWithText(username)
+                        profile_item.touch()
+                        time.sleep(0.1)
+                        self.vc.dump()
+                        # go to first article
+                        go_to_first_article()
+                        # now go up as many times as needed to get to the next article
+                        num_up_presses = articles_collected_in_profile
+                        for i in range(num_up_presses):
+                            self.bot.shell("input keyevent 19")
+                            time.sleep(0.1)
+                        self.vc.dump()
 
             # After breaking from article loop, these cleanup steps will run:
             # Return to WeChat home page

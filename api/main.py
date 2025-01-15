@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from datetime import datetime
 from typing import List, Optional
 from lib.db import ArticleDB
 

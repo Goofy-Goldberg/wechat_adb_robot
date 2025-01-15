@@ -1,6 +1,5 @@
 import subprocess
 import os
-import atexit
 import logging
 from contextlib import contextmanager
 
