@@ -180,9 +180,9 @@ class WeChatFeedMonitor:
         """
         loop_index = 0
         articles_collected = 0
-        max_articles = int(
-            os.getenv("MAX_ARTICLES", "0")
-        )  # 0 means no limit - depending on the flow, it's either the number of articles to collect in total (for the feed) or the number of articles to collect in each profile (for profiles)
+        max_articles = int(os.getenv("MAX_ARTICLES"), "-1")  # per profile
+        if max_articles == -1:
+            max_articles = None
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
@@ -190,7 +190,7 @@ class WeChatFeedMonitor:
             self.logger.info("Starting loop {}".format(loop_index))
 
             # Check if we've hit the article limit
-            if max_articles > 0 and articles_collected >= max_articles:
+            if max_articles and articles_collected >= max_articles:
                 self.logger.info(f"Reached maximum article limit of {max_articles}")
                 break
 
@@ -412,7 +412,7 @@ class WeChatFeedMonitor:
 
                     # Update collection count
                     articles_collected_in_profile += 1
-                    if max_articles > 0:
+                    if max_articles:
                         self.logger.info(
                             f"Collected {articles_collected_in_profile}/{max_articles} articles in profile {username}"
                         )
@@ -422,6 +422,10 @@ class WeChatFeedMonitor:
                             )
                             go_back_to_profiles()
                             break
+                    else:
+                        self.logger.info(
+                            f"Collected {articles_collected_in_profile} articles in profile {username}"
+                        )
 
                     # go back to the profiles list
                     self.bot.go_back()
