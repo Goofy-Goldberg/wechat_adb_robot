@@ -352,3 +352,8 @@ class ADBRobot:
     def remove_ensure_clipboard(self):
         # Remove the old ensure_clipboard method as it's no longer needed
         pass
+
+    def get_timezone(self):
+        """Get the device's timezone"""
+        result = self.shell("getprop persist.sys.timezone")
+        return result.strip() or "UTC"  # Default to UTC if not set

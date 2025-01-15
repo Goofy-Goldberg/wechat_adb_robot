@@ -7,13 +7,13 @@ from typing import Optional
 class Article:
     account: str
     title: str
-    timestamp: Optional[str] = None
+    published_at: Optional[float] = None
     url: Optional[str] = None
-    first_seen: float = None
+    timestamp: float = None
 
     def __post_init__(self):
-        if self.first_seen is None:
-            self.first_seen = time()
+        if self.timestamp is None:
+            self.timestamp = time()
 
     @property
     def key(self) -> str:
@@ -25,9 +25,9 @@ class Article:
         return {
             "account": self.account,
             "title": self.title,
-            "timestamp": self.timestamp,
+            "published_at": self.published_at,
             "url": self.url,
-            "first_seen": self.first_seen,
+            "timestamp": self.timestamp,
         }
 
     @classmethod

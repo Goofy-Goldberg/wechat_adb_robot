@@ -19,8 +19,8 @@ class ArticleDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account TEXT NOT NULL,
                     title TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    first_seen REAL NOT NULL,
+                    published_at REAL NOT NULL,
+                    timestamp REAL NOT NULL,
                     url TEXT NOT NULL UNIQUE,
                     UNIQUE(account, title)
                 )
@@ -40,9 +40,8 @@ class ArticleDB:
         self,
         account: str,
         title: str,
-        timestamp: str,
+        published_at: float,
         url: str,
-        first_seen: float = None,
     ) -> bool:
         """Add an article to the database if it doesn't exist"""
         try:
@@ -50,14 +49,16 @@ class ArticleDB:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO articles (account, title, timestamp, first_seen, url)
+                    INSERT INTO articles (account, title, published_at, timestamp, url)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (account, title, timestamp, first_seen or time(), url),
+                    (account, title, published_at, time.time(), url),
                 )
+                conn.commit()
                 return True
-        except sqlite3.IntegrityError:
-            # Article already exists (either duplicate URL or account+title combination)
+        except sqlite3.IntegrityError as e:
+            # Article already exists (either duplicate URL or account+title combination) or some other error occurred
+            print(e)  # todo: use logger
             return False
 
     def article_exists(self, account, title):
@@ -79,7 +80,7 @@ class ArticleDB:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT account, title, timestamp, first_seen, url 
+                SELECT account, title, published_at, timestamp, url 
                 FROM articles 
                 WHERE account = ? AND title = ?
                 """,
@@ -90,8 +91,8 @@ class ArticleDB:
                 return Article(
                     account=row[0],
                     title=row[1],
-                    timestamp=row[2],
-                    first_seen=row[3],
+                    published_at=row[2],
+                    timestamp=row[3],
                     url=row[4],
                 )
             return None
@@ -101,7 +102,7 @@ class ArticleDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT account, title, timestamp, first_seen, url FROM articles"
+                "SELECT account, title, published_at, timestamp, url FROM articles"
             )
             articles = {}
             for row in cursor.fetchall():
@@ -109,8 +110,8 @@ class ArticleDB:
                 articles[key] = {
                     "account": row[0],
                     "title": row[1],
-                    "timestamp": row[2],
-                    "first_seen": row[3],
+                    "published_at": row[2],
+                    "timestamp": row[3],
                     "url": row[4],
                 }
             return articles
@@ -123,10 +124,10 @@ class ArticleDB:
             if account:
                 cursor.execute(
                     """
-                    SELECT account, title, timestamp, first_seen, url 
+                    SELECT account, title, published_at, timestamp, url 
                     FROM articles 
                     WHERE account = ?
-                    ORDER BY first_seen DESC
+                    ORDER BY timestamp DESC
                     LIMIT ? OFFSET ?
                 """,
                     (account, limit, offset),
@@ -134,9 +135,9 @@ class ArticleDB:
             else:
                 cursor.execute(
                     """
-                    SELECT account, title, timestamp, first_seen, url 
+                    SELECT account, title, published_at, timestamp, url 
                     FROM articles 
-                    ORDER BY first_seen DESC
+                    ORDER BY timestamp DESC
                     LIMIT ? OFFSET ?
                 """,
                     (limit, offset),
@@ -146,8 +147,8 @@ class ArticleDB:
                 {
                     "account": row[0],
                     "title": row[1],
-                    "timestamp": row[2],
-                    "first_seen": row[3],
+                    "published_at": row[2],
+                    "timestamp": row[3],
                     "url": row[4],
                 }
                 for row in cursor.fetchall()

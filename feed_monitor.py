@@ -9,7 +9,8 @@ import pyperclip
 from lib.db import ArticleDB
 from lib.scrcpy import manage_scrcpy
 from lib.article import Article
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
+from zoneinfo import ZoneInfo
 
 
 class FeedArticleItem:
@@ -133,7 +134,7 @@ class WeChatFeedMonitor:
                 # find the copy link button
                 copy_link_button = self.vc.findViewWithText("Copy Link")
                 if not copy_link_button:
-                    self.logger.error(
+                    self.logger.info(
                         f"Cannot find copy link button, trying to tap the three dots again (attempt {attempt + 1}, sleeping {sleep_time:.2f}s)"
                     )
                     time.sleep(sleep_time)
@@ -180,8 +181,8 @@ class WeChatFeedMonitor:
         """
         loop_index = 0
         articles_collected = 0
-        max_articles = int(os.getenv("MAX_ARTICLES"), "-1")  # per profile
-        if max_articles == -1:
+        max_articles = int(os.getenv("MAX_ARTICLES"), 0)  # per profile
+        if max_articles == 0:
             max_articles = None
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
@@ -211,36 +212,33 @@ class WeChatFeedMonitor:
                 self.ensure_wechat_front()
                 time.sleep(0.1)
 
-            # Enter subscription page
-            self.go_feed_page()
-            time.sleep(0.1)
+                # Enter subscription page
+                self.go_feed_page()
+                time.sleep(0.1)
 
-            self.logger.info("Navigating to profiles page")
+                self.logger.info("Navigating to profiles page")
+                self.vc.dump()
+
+                try:
+                    view = self.vc.findViewByIdOrRaise("com.tencent.mm:id/g9")
+                    view.touch()
+                    time.sleep(0.1)
+                    self.vc.dump()
+                except ViewNotFoundException:
+                    self.logger.error(
+                        "View with resource-id 'com.tencent.mm:id/g9' not found."
+                    )
+
+                try:
+                    view = self.vc.findViewWithText("Followed Official Accounts")
+                    view.touch()
+                    time.sleep(0.1)
+                except ViewNotFoundException:
+                    self.logger.error(
+                        "View with text 'Followed Official Accounts' not found."
+                    )
+
             self.vc.dump()
-
-            try:
-                view = self.vc.findViewByIdOrRaise("com.tencent.mm:id/g9")
-                view.touch()
-                time.sleep(0.1)
-                self.vc.dump()
-            except ViewNotFoundException:
-                self.logger.error(
-                    "View with resource-id 'com.tencent.mm:id/g9' not found."
-                )
-
-            try:
-                view = self.vc.findViewWithText("Followed Official Accounts")
-                view.touch()
-                time.sleep(0.1)
-                self.vc.dump()
-            except ViewNotFoundException:
-                self.logger.error(
-                    "View with text 'Followed Official Accounts' not found."
-                )
-
-            # profile_items = self.vc.findViewsWithAttribute(
-            #     "resource-id", "com.tencent.mm:id/cyr"
-            # )
 
             usernames = [
                 username_view.map.get("text", "")
@@ -259,6 +257,22 @@ class WeChatFeedMonitor:
                 time.sleep(0.1)
 
                 # we are on the articles list now
+
+                def go_back_to_profiles():
+                    self.bot.go_back()
+                    time.sleep(0.1)
+                    self.vc.dump()
+
+                # check if there is a com.tencent.mm:id/byr view
+                byr_view = self.vc.findViewWithAttribute(
+                    "resource-id", "com.tencent.mm:id/byr"
+                )
+                if byr_view:
+                    self.logger.info(
+                        "This is the card type profile view, we don't have this implemented yet"
+                    )
+                    go_back_to_profiles()
+                    continue
 
                 def go_to_first_article():
                     # first we press down, up, down, down to select the newest (lowest) article
@@ -305,12 +319,10 @@ class WeChatFeedMonitor:
                                 == "com.tencent.mm:id/c3b"
                             ):
                                 timestamp_string = sibling.map.get("text", "")
-                                # Parse different timestamp formats:
-                                # - "2:09 PM" (today)
-                                # - "Yesterday 2:09 PM"
-                                # - "Mon 2:09 PM" (within last week)
-                                # - "1/11/25 2:09 PM" (older articles)
                                 try:
+                                    # Get the device's timezone
+                                    device_tz = ZoneInfo(self.bot.get_timezone())
+
                                     if "Yesterday" in timestamp_string:
                                         # Remove "Yesterday " prefix and parse as today, then subtract one day
                                         time_part = timestamp_string.replace(
@@ -319,14 +331,14 @@ class WeChatFeedMonitor:
                                         today_time = datetime.strptime(
                                             time_part, "%I:%M %p"
                                         ).time()
-                                        return datetime.combine(
-                                            datetime.now().date(), today_time
-                                        ) - timedelta(days=1)
+                                        local_dt = datetime.combine(
+                                            datetime.now(device_tz).date(), today_time
+                                        ).replace(tzinfo=device_tz) - timedelta(days=1)
                                     elif "/" in timestamp_string:
                                         # Full date format
-                                        return datetime.strptime(
+                                        local_dt = datetime.strptime(
                                             timestamp_string, "%m/%d/%y %I:%M %p"
-                                        )
+                                        ).replace(tzinfo=device_tz)
                                     elif any(
                                         day in timestamp_string
                                         for day in [
@@ -339,18 +351,48 @@ class WeChatFeedMonitor:
                                             "Sun",
                                         ]
                                     ):
-                                        # Day of week format
-                                        return datetime.strptime(
-                                            timestamp_string, "%a %I:%M %p"
+                                        # Day of week format - find the most recent matching day
+                                        day_name = timestamp_string.split()[0]
+                                        time_part = " ".join(
+                                            timestamp_string.split()[1:]
                                         )
+                                        today = datetime.now(device_tz)
+
+                                        # Convert day name to weekday number (0-6)
+                                        target_weekday = time.strptime(
+                                            day_name, "%a"
+                                        ).tm_wday
+                                        current_weekday = today.weekday()
+
+                                        # Calculate days difference
+                                        days_diff = (
+                                            current_weekday - target_weekday
+                                        ) % 7
+                                        if days_diff == 0:
+                                            days_diff = (
+                                                7  # If today, it must be from last week
+                                            )
+
+                                        target_date = today.date() - timedelta(
+                                            days=days_diff
+                                        )
+                                        target_time = datetime.strptime(
+                                            time_part, "%I:%M %p"
+                                        ).time()
+                                        local_dt = datetime.combine(
+                                            target_date, target_time
+                                        ).replace(tzinfo=device_tz)
                                     else:
                                         # Today's time only
                                         today_time = datetime.strptime(
                                             timestamp_string, "%I:%M %p"
                                         ).time()
-                                        return datetime.combine(
-                                            datetime.now().date(), today_time
-                                        )
+                                        local_dt = datetime.combine(
+                                            datetime.now(device_tz).date(), today_time
+                                        ).replace(tzinfo=device_tz)
+
+                                    # Convert to UTC timestamp
+                                    return local_dt.astimezone(UTC).timestamp()
                                 except ValueError:
                                     self.logger.error(
                                         f"Failed to parse timestamp: {timestamp_string}"
@@ -368,14 +410,9 @@ class WeChatFeedMonitor:
                         focused_view = self.vc.findViewWithAttribute("focused", "true")
                         timestamp = get_timestamp(focused_view)
 
-                    article.timestamp = timestamp
+                    article.published_at = timestamp
 
                     self.logger.info(f"Timestamp: {article.timestamp}")
-
-                    def go_back_to_profiles():
-                        self.bot.go_back()
-                        time.sleep(0.1)
-                        self.vc.dump()
 
                     # Check if we should process this article
                     if (
@@ -399,7 +436,12 @@ class WeChatFeedMonitor:
                         time.sleep(0.1)
 
                         # Store the article immediately after getting URL
-                        if self.db.add_article(**article.to_dict()):
+                        if self.db.add_article(
+                            account=article.account,
+                            title=article.title,
+                            published_at=article.published_at,
+                            url=article.url,
+                        ):
                             self.seen_articles[article.key] = article
                             self.logger.info("Article added to database.")
                         else:

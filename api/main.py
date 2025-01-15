@@ -12,8 +12,8 @@ app = FastAPI(
 class Article(BaseModel):
     account: str
     title: str
-    timestamp: str
-    first_seen: float
+    published_at: str
+    timestamp: float
     url: str
 
 
