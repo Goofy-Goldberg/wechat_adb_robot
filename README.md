@@ -1,7 +1,6 @@
 WAR: WeChat Automation Robot based on ADB
 ===
-![python](https://img.shields.io/badge/python-2.7%20%7C%203.5%20%7C%203.6-blue.svg)
-![license](https://img.shields.io/badge/license-MIT%20License-lightgrey.svg)
+Designed for Android WeChat app version 8.0.54.
 
 # What is WAR? & Why WAR?
 A WeChat automation script library based on [adb](https://developer.android.com/studio/command-line/adb), using pure click simulation. Supports Android devices and various operating systems that can use adb (tested on mac, ubuntu). Due to business requirements, current development mainly focuses on monitoring/scraping/operating official accounts/subscription accounts. More scripts can be added in the future, PRs welcome.
