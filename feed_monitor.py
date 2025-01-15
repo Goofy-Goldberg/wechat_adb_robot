@@ -7,6 +7,7 @@ from lib.utils import new_stream_logger
 from core.robot import ADBRobot
 import pyperclip
 from lib.db import ArticleDB
+from lib.scrcpy import manage_scrcpy
 
 
 class FeedArticleItem:
@@ -166,6 +167,7 @@ class WeChatFeedMonitor:
             selected_view = None
 
             def get_selected_view(views):
+                # todo: multiple views can have selected=true
                 for view_id in views:
                     view = self.vc.findViewById(view_id)
                     if view.map["selected"] == "true":
@@ -194,22 +196,29 @@ class WeChatFeedMonitor:
 
             # Article loop - go through all articles in the feed
             while True:
-                # Check for "articles(s) remainig"
-                # loop through all views and check if there is a view with the text "articles(s) remainig"
-                articles_remaining_view = None
-                for view_id in views:
-                    view = self.vc.findViewById(view_id)
-                    if (
-                        view.map.get("text", "")
-                        .lower()
-                        .endswith("articles(s) remainig")
-                    ):
-                        self.logger.info("Found 'articles(s) remainig'")
-                        break
+                # todo: for now we ignore the articles remaining button. Hopefully we'll have read the articles by the time of the collection script anyway. It requires a different loop to go through the ql7 and qkk title views within the box with the remaining articles.
 
-                if articles_remaining_view:
-                    articles_remaining_view.touch()
-                    time.sleep(0.5)
+                # # Check for "articles(s) remainig"
+                # # loop through all views and check if there is a view with the text "articles(s) remainig"
+                # articles_remaining_view = None
+                # for view_id in views:
+                #     view = self.vc.findViewById(view_id)
+                #     if (
+                #         view.map.get("text", "")
+                #         .lower()
+                #         .endswith("article(s) remaining")
+                #     ):  # the resource-id is com.tencent.mm:id/ov_, but we're using the text to find views wherever possible to avoid having to update the script when the app is updated (and presumably the resource-id changes)
+                #         self.logger.info("Found 'article(s) remaining'")
+                #         articles_remaining_view = view
+                #         break
+
+                # if articles_remaining_view:
+                #     articles_remaining_view.touch()
+                #     time.sleep(0.5)
+                #     # arrow up once to go back up
+                #     # todo: (this presumes the articles remaining button was under the last article we processed...)
+                #     self.bot.shell("input keyevent 19")
+                #     time.sleep(0.1)
 
                 # now we should be on the article, or rather on the account name view (axy). We'll get the metadata now.
 
@@ -217,108 +226,51 @@ class WeChatFeedMonitor:
 
                 self.logger.info("Getting article metadata")
 
-                metadata_complete = False  # if the title isn't fully visible, we'll have go down again... there doesn't seem to be a more elegant way of testing this though
+                article_metadata = {}
 
-                while not metadata_complete:
-                    siblings = self.vc.findViewById(
-                        selected_view.parent.getUniqueId()
-                    ).children
+                while "title" not in article_metadata:
+                    # find the username (lu8), timestamp (qdv) and title (ozs or qkk) and add them to the article_metadata dictionary
 
-                    # axa is on the same level as aq0, which then contains the account name (username) in lu8 and the timestamp in qdv. From there we will also jump to the next sibling to get the title
+                    # note: it would be great if we could simply get the parent of the selected view, but for some reason the parent is the whole ListView with all the articles, even if the first selected axy view is displayed as under a LinearLayout in Appium Inspector
 
-                    found_current = False
-                    view_aq0 = None
+                    # find selected views
+                    selected_views = []
+                    views = self.vc.getViewsById()
+                    for view_id in views:
+                        view = self.vc.findViewById(view_id)
+                        if view.map.get("selected", "false") == "true":
+                            selected_views.append(view)
 
-                    for sibling in siblings:
-                        # check if we are on the selected view (axa)
-                        if sibling == selected_view:
-                            found_current = True
-                        elif found_current:  # the previous sibling was the selected view (axa), so we're on the next sibling, which should be aq0
-                            if sibling.getId() == "com.tencent.mm:id/aq0":
-                                view_aq0 = sibling
-                                break
+                    for selected_view in selected_views:
+                        if selected_view.map.get("resource-id", "").endswith("lu8"):
+                            article_metadata["account"] = selected_view.map.get(
+                                "text", ""
+                            )
+                        elif selected_view.map.get("resource-id", "").endswith(
+                            "ozs"
+                        ) or selected_view.map.get("resource-id", "").endswith("qkk"):
+                            article_metadata["title"] = selected_view.map.get(
+                                "text", ""
+                            )
+                        elif selected_view.map.get("resource-id", "").endswith("mtd"):
+                            thumbnail_view = selected_view
 
-                    if not view_aq0:
-                        self.logger.error("Cannot find aq0 view")  # todo: handle better
-                        break
+                    if "title" not in article_metadata:
+                        self.logger.info(
+                            "Navigation: Pressing down arrow key to reveal full title and up again"
+                        )
+                        self.bot.shell("input keyevent 20")
+                        time.sleep(0.2)
+                        # # press arrow up to go back
+                        # self.bot.shell("input keyevent 19")
+                        # time.sleep(0.2)
+                        # self.bot.shell("input keyevent 20")
+                        # time.sleep(0.2)
+                        self.logger.info("Dumping view structure after navigation")
+                        # refresh view info
+                        self.vc.dump()
 
-                    # Find header containers
-                    article_metadata = {}
-
-                    # Recursive function to search through children
-                    def find_in_children(view, article_metadata):
-                        if view.map.get("resource-id", "").endswith("lu8"):
-                            article_metadata["account"] = view.map.get("text", "")
-                        elif view.map.get("resource-id", "").endswith("qdv"):
-                            article_metadata["timestamp"] = view.map.get("text", "")
-
-                        for child in view.getChildren():
-                            find_in_children(child, article_metadata)
-
-                    # Search through this container's children
-                    find_in_children(view_aq0, article_metadata)
-
-                    # Look for title in next sibling container
-                    if (
-                        "account" in article_metadata
-                        and "timestamp" in article_metadata
-                    ):
-                        parent = view_aq0.getParent()
-                        if parent:
-                            siblings = parent.getChildren()
-                            found_current = False
-                            for sibling in siblings:
-                                if sibling == view_aq0:
-                                    found_current = True
-                                    continue
-                                if found_current:
-                                    # Look for title in this container's children
-                                    def find_title_view(view):
-                                        if (
-                                            view.map.get("resource-id", "").endswith(
-                                                "ozs"
-                                            )
-                                            or view.map.get("resource-id", "").endswith(
-                                                "qkk"
-                                            )
-                                        ):  # ozs for regular title, qkk for a title with a secondary small thumbnail
-                                            return view
-                                        for child in view.getChildren():
-                                            title = find_title_view(child)
-                                            if title:
-                                                return title
-                                        return None
-
-                                    title_view = find_title_view(sibling)
-                                    if title_view:
-                                        metadata_complete = True
-                                        article_metadata["title"] = title_view.getText()
-                                        self.logger.info(
-                                            f"Found article: {article_metadata}"
-                                        )
-                                        break  # stop processing siblings
-                                    else:  # title not visible, so we'll have to go down again
-                                        self.logger.info(
-                                            "Navigation: Pressing down arrow key to reveal full title and up again"
-                                        )
-                                        self.bot.shell("input keyevent 20")
-                                        time.sleep(0.2)
-                                        # press arrow up to go back
-                                        self.bot.shell("input keyevent 19")
-                                        time.sleep(0.2)
-                                        self.bot.shell("input keyevent 20")
-                                        time.sleep(0.2)
-                                        self.logger.info(
-                                            "Dumping view structure after navigation"
-                                        )
-                                        # refresh view info
-                                        self.vc.dump()
-                                        views = self.vc.getViewsById()
-                                        selected_view = get_selected_view(views)
-                                        for view_id in views:
-                                            view_aq0 = self.vc.findViewById(view_id)
-                                            if view_aq0.map["selected"] == "true":
-                                                selected_view = view_aq0
+                self.logger.info(f"Found article metadata: {article_metadata}")
 
                 # check if article in seen_articles
                 article_key = (
@@ -339,7 +291,7 @@ class WeChatFeedMonitor:
 
                 # Open the article
                 self.logger.info("Opening article")
-                title_view.touch()
+                thumbnail_view.touch()
 
                 # Process the article
                 self.logger.info("Processing article...")
@@ -551,9 +503,12 @@ if __name__ == "__main__":
     if not device_serial:
         raise ValueError("DEVICE_SERIAL not found in .env file")
 
-    monitor = WeChatFeedMonitor(
-        serial=device_serial,
-        adb_path="adb",
-        logger=new_stream_logger(),
-    )
-    monitor.run(skip_first_batch=False)
+    from lib.scrcpy import manage_scrcpy
+
+    with manage_scrcpy():
+        monitor = WeChatFeedMonitor(
+            serial=device_serial,
+            adb_path="adb",
+            logger=new_stream_logger(),
+        )
+        monitor.run(skip_first_batch=False)
