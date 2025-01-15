@@ -372,22 +372,7 @@ class WeChatFeedMonitor:
                         break  # Break the article loop, continue with main loop
 
                     # Open the article
-                    article_url = self.process_article(
-                        thumbnail_view
-                    )  # todo: verify that this is working
-                    article_metadata["url"] = article_url
-
-                    # Mark as seen
-                    article_record = {
-                        "account": article_metadata["account"],
-                        "title": article_metadata["title"],
-                        "timestamp": article_metadata["timestamp"],
-                        "first_seen": time.time(),
-                        "url": article_metadata["url"],
-                    }
-                    article_key = (
-                        f"{article_metadata['account']}:{article_metadata['title']}"
-                    )
+                    article_metadata["url"] = self.process_article(thumbnail_view)
 
                     # Add to database and update local cache
                     if self.db.add_article(
@@ -396,8 +381,11 @@ class WeChatFeedMonitor:
                         article_metadata["timestamp"],
                         article_metadata["url"],
                     ):
-                        self.seen_articles[article_key] = article_record
-                        self.seen_articles_this_run[article_key] = article_record
+                        article_key = (
+                            f"{article_metadata['account']}:{article_metadata['title']}"
+                        )
+                        self.seen_articles[article_key] = article_metadata
+                        self.seen_articles_this_run[article_key] = article_metadata
 
                     articles_collected += 1
                     if max_articles > 0:
@@ -486,7 +474,13 @@ class WeChatFeedMonitor:
 
                     while not profile_done:
                         # now let's get the article metadata
-                        article_metadata = {"username": username}
+                        article_metadata = {
+                            "account": username,  # We already have the account name
+                            "title": None,
+                            "timestamp": None,
+                            "first_seen": time.time(),
+                            "url": None,
+                        }
 
                         # find the focused element (where focused = true)
                         focused_view = self.vc.findViewWithAttribute("focused", "true")
@@ -509,7 +503,7 @@ class WeChatFeedMonitor:
                         article_metadata["title"] = find_title(focused_view)
                         self.logger.info(f"Title: {article_metadata.get('title')}")
 
-                        # find the timestamp - it's a sibling of the focused view with the id com.tencent.mm:id/c3b
+                        # find the timestamp
                         siblings = focused_view.parent.children
                         for sibling in siblings:
                             if (
@@ -525,25 +519,53 @@ class WeChatFeedMonitor:
                             f"Timestamp: {article_metadata.get('timestamp')}"
                         )
 
-                        if username not in articles_by_username:
-                            articles_by_username[username] = []
+                        # Check if we should process this article
+                        article_key = (
+                            f"{article_metadata['account']}:{article_metadata['title']}"
+                        )
 
-                        articles_by_username[username].append(article_metadata)
-
-                        if len(articles_by_username[username]) >= int(
-                            os.getenv("MAX_ARTICLES_PER_PROFILE", "10")
+                        if (
+                            article_key in self.seen_articles
+                            and article_key not in self.seen_articles_this_run
                         ):
+                            self.logger.info(
+                                "Article already seen, moving to next profile"
+                            )
                             profile_done = True
+                            continue
 
-                        # check if the last article is already in the database
-                        if article_metadata["title"] in self.seen_articles:
+                        if article_key in self.seen_articles_this_run:
+                            self.logger.info(
+                                "Reached previously seen article in this run, moving to next profile"
+                            )
                             profile_done = True
+                            continue
 
-                        # tap the focused view to open the article
+                        # Get the article URL
                         article_metadata["url"] = self.process_article(focused_view)
                         time.sleep(0.1)
 
-                        # todo! store the article
+                        # Store the article
+                        if self.db.add_article(
+                            article_metadata["account"],
+                            article_metadata["title"],
+                            article_metadata["timestamp"],
+                            article_metadata["url"],
+                        ):
+                            self.seen_articles[article_key] = article_metadata
+                            self.seen_articles_this_run[article_key] = article_metadata
+
+                        # Update collection count
+                        articles_collected += 1
+                        if max_articles > 0:
+                            self.logger.info(
+                                f"Collected {articles_collected}/{max_articles} articles"
+                            )
+                            if articles_collected >= max_articles:
+                                self.logger.info(
+                                    "Maximum article limit reached, ending collection"
+                                )
+                                return  # Exit the entire collection process
 
                         # navigate up
                         self.bot.shell("input keyevent 19")
