@@ -128,6 +128,16 @@ class ADBRobot:
     def enter(self):
         self.shell("input keyevent 66")
 
+    def key_up(self, num_times=1):
+        for _ in range(num_times):
+            self.shell("input keyevent 19")
+            time.sleep(0.1)
+
+    def key_down(self, num_times=1):
+        for _ in range(num_times):
+            self.shell("input keyevent 20")
+            time.sleep(0.1)
+
     def tap(self, x, y):
         self.shell("input tap {} {}".format(x, y))
 
@@ -265,25 +275,33 @@ class ADBRobot:
         points = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]").match(bounds).groups()
         return list(map(int, points))
 
-    def tap_bounds(self, bounds):
+    def tap_bounds(self, bounds_or_view):
         """
         Useful for tapping on views that don't have a touch() method.
 
         Bounds can be either a tuple produced by .getBounds(), e.g. ((22, 1651), (1058, 1694)), or a string like '[42,1023][126,1080]'. In any case, the coordinates are left, top, right, bottom.
         """
+        if "viewclient" in type(bounds_or_view).__module__:
+            # we got a view
+            bounds = bounds_or_view.bounds()
+        else:
+            bounds = bounds_or_view
+
         # check if bounds is tuple
         if isinstance(bounds, tuple):
             left, top = bounds[0]
             right, bottom = bounds[1]
             center_x = (left + right) // 2
             center_y = (top + bottom) // 2
-            self.tap(center_x, center_y)
+
         else:
             bounds_points = self.get_points_in_bounds(bounds)
             left, top, right, bottom = bounds_points
             center_x = (left + right) // 2
             center_y = (top + bottom) // 2
-            self.tap(center_x, center_y)
+
+        print(f"Tapping at {center_x}, {center_y}")  # todo: use logger
+        self.tap(center_x, center_y)
 
     def set_clipboard_text(self, text):
         """
