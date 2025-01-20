@@ -365,7 +365,7 @@ class WeChatFeedMonitor:
                     # if we are on a batch of articles, process them one by one
                     if self.find_in_descendants(
                         focused_view, "resource-id", "com.tencent.mm:id/by9"
-                    ):  # todo! check if the focused view has by9 and if so, process all under it and move on
+                    ):
                         is_batch = True
                         # multiple articles under the same focused_view (bvm). ql4 is for the "hero" article, qit is used for those without thumbnails
 
