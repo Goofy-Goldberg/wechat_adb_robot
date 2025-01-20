@@ -290,44 +290,119 @@ class WeChatFeedMonitor:
                     time.sleep(0.1)
                     self.vc.dump()
 
-                # need to check if the last item (byr) contains a descendant with resource-id com.tencent.mm:id/by9
-                if self.find_in_descendants(
-                    self.vc.findViewsWithAttribute(
-                        "resource-id", "com.tencent.mm:id/byr"
-                    )[-1],
-                    "resource-id",
-                    "com.tencent.mm:id/by9",
-                ):
-                    last_view_is_by9 = True
-                else:
-                    last_view_is_by9 = False
+                def parse_timestamp(timestamp_string):
+                    try:
+                        # Get the device's timezone
+                        device_tz = ZoneInfo(self.bot.get_timezone())
 
-                # similarly, check if the last view is a com.tencent.mm:id/bvo
-                if self.find_in_descendants(
-                    self.vc.findViewsWithAttribute(
-                        "resource-id", "com.tencent.mm:id/byr"
-                    )[-1],
-                    "resource-id",
-                    "com.tencent.mm:id/bvo",
-                ):
-                    last_view_is_bvo = True
-                else:
-                    last_view_is_bvo = False
+                        if "Yesterday" in timestamp_string:
+                            # Remove "Yesterday " prefix and parse as today, then subtract one day
+                            time_part = timestamp_string.replace("Yesterday ", "")
+                            today_time = datetime.strptime(time_part, "%I:%M %p").time()
+                            local_dt = datetime.combine(
+                                datetime.now(device_tz).date(),
+                                today_time,
+                            ).replace(tzinfo=device_tz) - timedelta(days=1)
+                        elif "/" in timestamp_string:
+                            # Full date format
+                            local_dt = datetime.strptime(
+                                timestamp_string, "%m/%d/%y %I:%M %p"
+                            ).replace(tzinfo=device_tz)
+                        elif any(
+                            day in timestamp_string
+                            for day in [
+                                "Mon",
+                                "Tue",
+                                "Wed",
+                                "Thu",
+                                "Fri",
+                                "Sat",
+                                "Sun",
+                            ]
+                        ):
+                            # Day of week format - find the most recent matching day
+                            day_name = timestamp_string.split()[0]
+                            time_part = " ".join(timestamp_string.split()[1:])
+                            today = datetime.now(device_tz)
+
+                            # Convert day name to weekday number (0-6)
+                            target_weekday = time.strptime(day_name, "%a").tm_wday
+                            current_weekday = today.weekday()
+
+                            # Calculate days difference
+                            days_diff = (current_weekday - target_weekday) % 7
+                            if days_diff == 0:
+                                days_diff = 7  # If today, it must be from last week
+
+                            target_date = today.date() - timedelta(days=days_diff)
+                            target_time = datetime.strptime(
+                                time_part, "%I:%M %p"
+                            ).time()
+                            local_dt = datetime.combine(
+                                target_date, target_time
+                            ).replace(tzinfo=device_tz)
+                        else:
+                            # Today's time only
+                            today_time = datetime.strptime(
+                                timestamp_string, "%I:%M %p"
+                            ).time()
+                            local_dt = datetime.combine(
+                                datetime.now(device_tz).date(),
+                                today_time,
+                            ).replace(tzinfo=device_tz)
+
+                        # Convert to UTC timestamp
+                        return local_dt.astimezone(UTC).timestamp()
+                    except ValueError:
+                        self.logger.error(
+                            f"Failed to parse timestamp: {timestamp_string}"
+                        )
+
+                # # need to check if the last item (byr) contains a descendant with resource-id com.tencent.mm:id/by9
+                # if self.find_in_descendants(
+                #     self.vc.findViewsWithAttribute(
+                #         "resource-id", "com.tencent.mm:id/byr"
+                #     )[-1],
+                #     "resource-id",
+                #     "com.tencent.mm:id/by9",
+                # ):
+                #     last_view_is_by9 = True
+                # else:
+                #     last_view_is_by9 = False
+
+                # # similarly, check if the last view is a com.tencent.mm:id/bvo
+                # if self.find_in_descendants(
+                #     self.vc.findViewsWithAttribute(
+                #         "resource-id", "com.tencent.mm:id/byr"
+                #     )[-1],
+                #     "resource-id",
+                #     "com.tencent.mm:id/bvo",
+                # ):
+                #     last_view_is_bvo = True
+                # else:
+                #     last_view_is_bvo = False
 
                 def go_to_first_article():
                     # first is the lowest one, but we get to it with a different sequence of key events depending on what type of view it is
                     self.bot.key_down()
                     self.bot.key_up()
-                    self.bot.key_down()
-                    if not last_view_is_by9 and not last_view_is_bvo:
-                        self.bot.key_down()
+                    self.bot.key_down(
+                        len(
+                            self.vc.findViewsWithAttribute(
+                                "resource-id", "com.tencent.mm:id/byr"
+                            )
+                        )
+                        - 1
+                    )  # go down to the last item
                     self.vc.dump()
 
                 go_to_first_article()
 
+                last_timestamp = None
+
                 profile_done = False
 
-                while not profile_done:
+                while articles_collected_in_profile < max_articles and not profile_done:
 
                     def go_to_next_item():
                         # go back to the profiles list
@@ -354,8 +429,29 @@ class WeChatFeedMonitor:
                         focused_view.map.get("resource-id", "")
                         == "com.tencent.mm:id/bvo"
                     ):  # this means we're on a "message"
-                        self.logger.info("This is a message, skipping")
+                        # get the timestamp - if it fails because it's not visible, we should be on the very first item in the feed
+                        self.logger.info("This is a message, skipping...")
                         articles_collected_in_profile += 1  # todo: we're counting a skipped message as an article, fix this
+                        try:
+                            timestamp = parse_timestamp(
+                                self.find_in_descendants(
+                                    focused_view, "resource-id", "com.tencent.mm:id/c3b"
+                                )[-1].map.get("text", "")
+                            )
+                        except Exception as e:
+                            self.logger.info(
+                                f"Couldn't get timestamp, assuming this is the first item in the feed (error: {e})"
+                            )
+                            profile_done = True
+                            break
+
+                        if last_timestamp and last_timestamp == timestamp:
+                            self.logger.info(
+                                "We're seeing the same message again, assuming we've reached the end of the feed..."
+                            )
+                            profile_done = True
+                            break
+                        last_timestamp = timestamp
                         go_to_next_item()
                         continue
 
@@ -397,84 +493,6 @@ class WeChatFeedMonitor:
                     for article_view in article_views:
                         # Create article with required fields
                         article = Article(account=username, title=None)
-
-                        def parse_timestamp(timestamp_string):
-                            try:
-                                # Get the device's timezone
-                                device_tz = ZoneInfo(self.bot.get_timezone())
-
-                                if "Yesterday" in timestamp_string:
-                                    # Remove "Yesterday " prefix and parse as today, then subtract one day
-                                    time_part = timestamp_string.replace(
-                                        "Yesterday ", ""
-                                    )
-                                    today_time = datetime.strptime(
-                                        time_part, "%I:%M %p"
-                                    ).time()
-                                    local_dt = datetime.combine(
-                                        datetime.now(device_tz).date(),
-                                        today_time,
-                                    ).replace(tzinfo=device_tz) - timedelta(days=1)
-                                elif "/" in timestamp_string:
-                                    # Full date format
-                                    local_dt = datetime.strptime(
-                                        timestamp_string, "%m/%d/%y %I:%M %p"
-                                    ).replace(tzinfo=device_tz)
-                                elif any(
-                                    day in timestamp_string
-                                    for day in [
-                                        "Mon",
-                                        "Tue",
-                                        "Wed",
-                                        "Thu",
-                                        "Fri",
-                                        "Sat",
-                                        "Sun",
-                                    ]
-                                ):
-                                    # Day of week format - find the most recent matching day
-                                    day_name = timestamp_string.split()[0]
-                                    time_part = " ".join(timestamp_string.split()[1:])
-                                    today = datetime.now(device_tz)
-
-                                    # Convert day name to weekday number (0-6)
-                                    target_weekday = time.strptime(
-                                        day_name, "%a"
-                                    ).tm_wday
-                                    current_weekday = today.weekday()
-
-                                    # Calculate days difference
-                                    days_diff = (current_weekday - target_weekday) % 7
-                                    if days_diff == 0:
-                                        days_diff = (
-                                            7  # If today, it must be from last week
-                                        )
-
-                                    target_date = today.date() - timedelta(
-                                        days=days_diff
-                                    )
-                                    target_time = datetime.strptime(
-                                        time_part, "%I:%M %p"
-                                    ).time()
-                                    local_dt = datetime.combine(
-                                        target_date, target_time
-                                    ).replace(tzinfo=device_tz)
-                                else:
-                                    # Today's time only
-                                    today_time = datetime.strptime(
-                                        timestamp_string, "%I:%M %p"
-                                    ).time()
-                                    local_dt = datetime.combine(
-                                        datetime.now(device_tz).date(),
-                                        today_time,
-                                    ).replace(tzinfo=device_tz)
-
-                                # Convert to UTC timestamp
-                                return local_dt.astimezone(UTC).timestamp()
-                            except ValueError:
-                                self.logger.error(
-                                    f"Failed to parse timestamp: {timestamp_string}"
-                                )
 
                         def article_already_seen():
                             if (
@@ -548,7 +566,7 @@ class WeChatFeedMonitor:
 
                         # Check if we should process this article
                         if article_already_seen():
-                            go_back_to_profiles()
+                            profile_done = True
                             break
 
                         # Get the article URL
@@ -574,14 +592,17 @@ class WeChatFeedMonitor:
                                 self.logger.info(
                                     f"Maximum article limit reached, ending collection for this profile ({username})"
                                 )
-                                go_back_to_profiles()
+
                                 break
                         else:
                             self.logger.info(
                                 f"Collected {articles_collected_in_profile} articles in profile {username}"
                             )
 
-                    go_to_next_item()
+                    if not profile_done:
+                        go_to_next_item()
+
+                go_back_to_profiles()
 
             # After breaking from article loop, these cleanup steps will run:
             # Return to WeChat home page
