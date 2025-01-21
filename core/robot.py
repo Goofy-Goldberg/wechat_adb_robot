@@ -138,6 +138,11 @@ class ADBRobot:
             self.shell("input keyevent 20")
             time.sleep(0.1)
 
+    def key_tab(self, num_times=1):
+        for _ in range(num_times):
+            self.shell("input keyevent 61")
+            time.sleep(0.1)
+
     def tap(self, x, y):
         self.shell("input tap {} {}".format(x, y))
 

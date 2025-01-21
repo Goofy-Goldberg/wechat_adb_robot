@@ -272,6 +272,7 @@ class WeChatFeedMonitor:
             # debugging
             # usernames = ["俄罗斯卫星通讯社"]
             # usernames = ["新华社"]
+            # usernames = ["中国驻安哥拉大使馆"]
 
             for (
                 username
@@ -394,6 +395,7 @@ class WeChatFeedMonitor:
                         )
                         - 1
                     )  # go down to the last item
+                    # todo!: tab presses are more reliable
                     self.vc.dump()
 
                 go_to_first_article()
