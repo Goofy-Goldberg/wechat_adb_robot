@@ -122,8 +122,14 @@ class ADBRobot:
             self.go_back()
         self.go_home()
 
-    def go_back(self):
-        self.shell("input keyevent 4")
+    def go_back(self, num_times=1):
+        for _ in range(num_times):
+            self.shell("input keyevent 4")
+            time.sleep(0.1)
+
+    def type(self, text):
+        self.shell(f"input text {text}")
+        time.sleep(0.1)
 
     def enter(self):
         self.shell("input keyevent 66")

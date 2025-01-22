@@ -1,6 +1,8 @@
 # coding:utf-8
 import time
 import os
+import re
+import argparse
 from com.dtmilano.android.viewclient import ViewClient, AdbClient, ViewNotFoundException
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
@@ -11,6 +13,7 @@ from lib.scrcpy import manage_scrcpy
 from lib.article import Article
 from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
 
 class FeedArticleItem:
@@ -122,22 +125,47 @@ class WeChatFeedMonitor:
                 found.append(sibling)
         return found
 
-    def process_article(self, view_to_click_to_open):
+    def store_article(self, article):
+        # Store the article immediately after getting URL
+        if self.db.add_article(
+            account=article.account,
+            title=article.title,
+            published_at=article.published_at,
+            url=article.url,
+        ):
+            self.seen_articles[article.key] = article
+            self.logger.info("Article added to database.")
+            return True
+        else:
+            self.logger.info(
+                "Article already exists in database (duplicate URL), skipping"
+            )  # todo: this can be misleading if the actual error is something else
+
+    def process_article_inner(self):
         """
-        Process an article by clicking on it and then copying the link
-        Accepts a view object to click to open the article
-        Returns the URL of the article
+        The actual processing of an article when already on the article page
+        Returns URL of the article
         """
-        self.logger.info("Opening article")
-        self.bot.tap_bounds(view_to_click_to_open)
-        self.bot.tap_bounds(
-            view_to_click_to_open
-        )  # todo: check why double tap is needed
-        time.sleep(0.1)
 
         # Process the article
         self.logger.info("Processing article...")
         time.sleep(0.5)
+
+        metadata = {}
+
+        metadata["title"] = self.vc.findViewById("activity-name").getText()
+        published_at = self.vc.findViewById("publish_time").getText()
+
+        # parse published_at - the format is like 2025年01月22日 08:08
+        local_dt = datetime.strptime(published_at, "%Y年%m月%d日 %H:%M")
+        # Get device's timezone
+        device_tz = ZoneInfo(self.bot.get_timezone())
+        # Attach the device's timezone to the datetime
+        local_dt = local_dt.replace(tzinfo=device_tz)
+        # Convert to UTC timestamp
+        metadata["published_at"] = local_dt.astimezone(UTC).timestamp()
+
+        time.sleep(0.1)
 
         got_url = False
 
@@ -190,10 +218,29 @@ class WeChatFeedMonitor:
         self.bot.swipe(start_x=250, start_y=2220, dx=-100)
         time.sleep(0.1)
 
+        metadata["url"] = clipboard_new
+
+        return metadata
+
+    def process_article(self, view_to_click_to_open):
+        """
+        Process an article by clicking on it and then copying the link
+        Accepts a view object to click to open the article
+        Returns the URL of the article
+        """
+        self.logger.info("Opening article")
+        self.bot.tap_bounds(view_to_click_to_open)
+        self.bot.tap_bounds(
+            view_to_click_to_open
+        )  # todo: check why double tap is needed
+        time.sleep(0.1)
+
+        product = self.process_article_inner()
+
         self.bot.go_back()
         time.sleep(0.5)
 
-        return clipboard_new
+        return product["url"]
 
     def run(self, skip_first_batch=True):
         """
@@ -262,351 +309,408 @@ class WeChatFeedMonitor:
 
             self.vc.dump()
 
-            usernames = [
-                username_view.map.get("text", "")
-                for username_view in self.vc.findViewsWithAttribute(
-                    "resource-id", "com.tencent.mm:id/lun"
-                )
-            ]
+            if os.getenv("FEED_TYPE").lower() == "followed":
+                usernames = [
+                    username_view.map.get("text", "")
+                    for username_view in self.vc.findViewsWithAttribute(
+                        "resource-id", "com.tencent.mm:id/lun"
+                    )
+                ]
 
-            # debugging
-            # usernames = ["俄罗斯卫星通讯社"]
-            # usernames = ["新华社"]
-            # usernames = ["中国驻安哥拉大使馆"]
+                # debugging
+                # usernames = ["俄罗斯卫星通讯社"]
+                # usernames = ["新华社"]
+                # usernames = ["中国驻安哥拉大使馆"]
 
-            for (
-                username
-            ) in usernames:  # todo!: scroll when visible usernames are exhausted
-                articles_collected_in_profile = 0
+                for (
+                    username
+                ) in usernames:  # todo!: scroll when visible usernames are exhausted
+                    articles_collected_in_profile = 0
 
-                profile_item = self.vc.findViewWithText(username)
-                profile_item.touch()
-                time.sleep(0.1)
-                self.vc.dump()
-
-                # we are on the articles list now
-
-                def go_back_to_profiles():
-                    self.bot.go_back()
+                    profile_item = self.vc.findViewWithText(username)
+                    profile_item.touch()
                     time.sleep(0.1)
                     self.vc.dump()
 
-                def parse_timestamp(timestamp_string):
-                    try:
-                        # Get the device's timezone
-                        device_tz = ZoneInfo(self.bot.get_timezone())
+                    # we are on the articles list now
 
-                        if "Yesterday" in timestamp_string:
-                            # Remove "Yesterday " prefix and parse as today, then subtract one day
-                            time_part = timestamp_string.replace("Yesterday ", "")
-                            today_time = datetime.strptime(time_part, "%I:%M %p").time()
-                            local_dt = datetime.combine(
-                                datetime.now(device_tz).date(),
-                                today_time,
-                            ).replace(tzinfo=device_tz) - timedelta(days=1)
-                        elif "/" in timestamp_string:
-                            # Full date format
-                            local_dt = datetime.strptime(
-                                timestamp_string, "%m/%d/%y %I:%M %p"
-                            ).replace(tzinfo=device_tz)
-                        elif any(
-                            day in timestamp_string
-                            for day in [
-                                "Mon",
-                                "Tue",
-                                "Wed",
-                                "Thu",
-                                "Fri",
-                                "Sat",
-                                "Sun",
-                            ]
-                        ):
-                            # Day of week format - find the most recent matching day
-                            day_name = timestamp_string.split()[0]
-                            time_part = " ".join(timestamp_string.split()[1:])
-                            today = datetime.now(device_tz)
-
-                            # Convert day name to weekday number (0-6)
-                            target_weekday = time.strptime(day_name, "%a").tm_wday
-                            current_weekday = today.weekday()
-
-                            # Calculate days difference
-                            days_diff = (current_weekday - target_weekday) % 7
-                            if days_diff == 0:
-                                days_diff = 7  # If today, it must be from last week
-
-                            target_date = today.date() - timedelta(days=days_diff)
-                            target_time = datetime.strptime(
-                                time_part, "%I:%M %p"
-                            ).time()
-                            local_dt = datetime.combine(
-                                target_date, target_time
-                            ).replace(tzinfo=device_tz)
-                        else:
-                            # Today's time only
-                            today_time = datetime.strptime(
-                                timestamp_string, "%I:%M %p"
-                            ).time()
-                            local_dt = datetime.combine(
-                                datetime.now(device_tz).date(),
-                                today_time,
-                            ).replace(tzinfo=device_tz)
-
-                        # Convert to UTC timestamp
-                        return local_dt.astimezone(UTC).timestamp()
-                    except ValueError:
-                        self.logger.error(
-                            f"Failed to parse timestamp: {timestamp_string}"
-                        )
-
-                # # need to check if the last item (byr) contains a descendant with resource-id com.tencent.mm:id/by9
-                # if self.find_in_descendants(
-                #     self.vc.findViewsWithAttribute(
-                #         "resource-id", "com.tencent.mm:id/byr"
-                #     )[-1],
-                #     "resource-id",
-                #     "com.tencent.mm:id/by9",
-                # ):
-                #     last_view_is_by9 = True
-                # else:
-                #     last_view_is_by9 = False
-
-                # # similarly, check if the last view is a com.tencent.mm:id/bvo
-                # if self.find_in_descendants(
-                #     self.vc.findViewsWithAttribute(
-                #         "resource-id", "com.tencent.mm:id/byr"
-                #     )[-1],
-                #     "resource-id",
-                #     "com.tencent.mm:id/bvo",
-                # ):
-                #     last_view_is_bvo = True
-                # else:
-                #     last_view_is_bvo = False
-
-                def go_to_first_article():
-                    # first is the lowest one, but we get to it with a different sequence of key events depending on what type of view it is
-                    self.bot.key_down()
-                    self.bot.key_up()
-                    self.bot.key_down(
-                        len(
-                            self.vc.findViewsWithAttribute(
-                                "resource-id", "com.tencent.mm:id/byr"
-                            )
-                        )
-                        - 1
-                    )  # go down to the last item
-                    # todo!: tab presses are more reliable
-                    self.vc.dump()
-
-                go_to_first_article()
-
-                last_timestamp = None
-
-                profile_done = False
-
-                while articles_collected_in_profile < max_articles and not profile_done:
-
-                    def go_to_next_item():
-                        # go back to the profiles list
+                    def go_back_to_profiles():
                         self.bot.go_back()
-                        self.vc.dump()
-                        # click on the username again
-                        profile_item = self.vc.findViewWithText(username)
-                        profile_item.touch()
-                        self.vc.dump()
-                        # go to first article
-                        go_to_first_article()
-                        # now go up as many times as needed to get to the next article
-                        num_up_presses = articles_collected_in_profile
-                        for i in range(num_up_presses):
-                            self.bot.shell("input keyevent 19")
-
+                        time.sleep(0.1)
                         self.vc.dump()
 
-                    # find the focused element
-                    focused_view = self.vc.findViewWithAttribute("focused", "true")
-
-                    # if we are on a message, skip it
-                    if (
-                        focused_view.map.get("resource-id", "")
-                        == "com.tencent.mm:id/bvo"
-                    ):  # this means we're on a "message"
-                        # get the timestamp - if it fails because it's not visible, we should be on the very first item in the feed
-                        self.logger.info("This is a message, skipping...")
-                        articles_collected_in_profile += 1  # todo: we're counting a skipped message as an article, fix this
+                    def parse_timestamp(timestamp_string):
                         try:
-                            timestamp = parse_timestamp(
-                                self.find_in_descendants(
-                                    focused_view, "resource-id", "com.tencent.mm:id/c3b"
-                                )[-1].map.get("text", "")
+                            # Get the device's timezone
+                            device_tz = ZoneInfo(self.bot.get_timezone())
+
+                            if "Yesterday" in timestamp_string:
+                                # Remove "Yesterday " prefix and parse as today, then subtract one day
+                                time_part = timestamp_string.replace("Yesterday ", "")
+                                today_time = datetime.strptime(
+                                    time_part, "%I:%M %p"
+                                ).time()
+                                local_dt = datetime.combine(
+                                    datetime.now(device_tz).date(),
+                                    today_time,
+                                ).replace(tzinfo=device_tz) - timedelta(days=1)
+                            elif "/" in timestamp_string:
+                                # Full date format
+                                local_dt = datetime.strptime(
+                                    timestamp_string, "%m/%d/%y %I:%M %p"
+                                ).replace(tzinfo=device_tz)
+                            elif any(
+                                day in timestamp_string
+                                for day in [
+                                    "Mon",
+                                    "Tue",
+                                    "Wed",
+                                    "Thu",
+                                    "Fri",
+                                    "Sat",
+                                    "Sun",
+                                ]
+                            ):
+                                # Day of week format - find the most recent matching day
+                                day_name = timestamp_string.split()[0]
+                                time_part = " ".join(timestamp_string.split()[1:])
+                                today = datetime.now(device_tz)
+
+                                # Convert day name to weekday number (0-6)
+                                target_weekday = time.strptime(day_name, "%a").tm_wday
+                                current_weekday = today.weekday()
+
+                                # Calculate days difference
+                                days_diff = (current_weekday - target_weekday) % 7
+                                if days_diff == 0:
+                                    days_diff = 7  # If today, it must be from last week
+
+                                target_date = today.date() - timedelta(days=days_diff)
+                                target_time = datetime.strptime(
+                                    time_part, "%I:%M %p"
+                                ).time()
+                                local_dt = datetime.combine(
+                                    target_date, target_time
+                                ).replace(tzinfo=device_tz)
+                            else:
+                                # Today's time only
+                                today_time = datetime.strptime(
+                                    timestamp_string, "%I:%M %p"
+                                ).time()
+                                local_dt = datetime.combine(
+                                    datetime.now(device_tz).date(),
+                                    today_time,
+                                ).replace(tzinfo=device_tz)
+
+                            # Convert to UTC timestamp
+                            return local_dt.astimezone(UTC).timestamp()
+                        except ValueError:
+                            self.logger.error(
+                                f"Failed to parse timestamp: {timestamp_string}"
                             )
-                        except Exception as e:
-                            self.logger.info(
-                                f"Couldn't get timestamp, assuming this is the first item in the feed (error: {e})"
-                            )
-                            profile_done = True
-                            break
 
-                        if last_timestamp and last_timestamp == timestamp:
-                            self.logger.info(
-                                "We're seeing the same message again, assuming we've reached the end of the feed..."
-                            )
-                            profile_done = True
-                            break
-                        last_timestamp = timestamp
-                        go_to_next_item()
-                        continue
-
-                    article_views = []
-                    is_batch = False
-
-                    # if we are on a batch of articles, process them one by one
-                    if self.find_in_descendants(
-                        focused_view, "resource-id", "com.tencent.mm:id/by9"
-                    ):
-                        is_batch = True
-                        # multiple articles under the same focused_view (bvm). ql4 is for the "hero" article, qit is used for those without thumbnails
-
-                        # do up and down to view the whole item with the timestamp
-                        self.bot.key_up()
+                    def go_to_first_article():
+                        # first is the lowest one, but we get to it with a different sequence of key events depending on what type of view it is
                         self.bot.key_down()
+                        self.bot.key_up()
+                        self.bot.key_down(
+                            len(
+                                self.vc.findViewsWithAttribute(
+                                    "resource-id", "com.tencent.mm:id/byr"
+                                )
+                            )
+                            - 1
+                        )  # go down to the last item
+                        # todo!: tab presses are more reliable
                         self.vc.dump()
 
-                        article_views = self.find_in_descendants(
-                            focused_view, "resource-id", "com.tencent.mm:id/qit"
-                        )
-                        article_views += self.find_in_descendants(
-                            focused_view, "resource-id", "com.tencent.mm:id/ql4"
-                        )
+                    go_to_first_article()
 
-                        timestamp_string = self.find_in_descendants(
-                            focused_view.parent.parent,
-                            "resource-id",
-                            "com.tencent.mm:id/c3b",
-                        )[
-                            -1
-                        ].map.get(
-                            "text", ""
-                        )  # for some reason, c3b is not a child of the parent (even though it looks like it in appium inspector). So we go one level up and find all the c3b elements and take the last one, which should be the one that belongs to this batch
+                    last_timestamp = None
 
-                    else:
-                        article_views = [focused_view]
+                    profile_done = False
 
-                    for article_view in article_views:
-                        # Create article with required fields
-                        article = Article(account=username, title=None)
+                    while (
+                        articles_collected_in_profile < max_articles
+                        and not profile_done
+                    ):
 
-                        def article_already_seen():
-                            if (
-                                article.key in self.seen_articles
-                                and article.key not in self.seen_articles_this_run
-                            ):
-                                self.logger.info(
-                                    "Article already seen, moving to next profile"
-                                )
-                                return True
-                            if article.key in self.seen_articles_this_run:
-                                self.logger.info(
-                                    "Reached previously seen article in this run, moving to next profile"
-                                )
-                                return True
-
-                        def store_article(article):
-                            # Store the article immediately after getting URL
-                            if self.db.add_article(
-                                account=article.account,
-                                title=article.title,
-                                published_at=article.published_at,
-                                url=article.url,
-                            ):
-                                self.seen_articles[article.key] = article
-                                self.logger.info("Article added to database.")
-                                return True
-                            else:
-                                self.logger.info(
-                                    "Article already exists in database (duplicate URL), skipping"
-                                )
-
-                        if not is_batch:
-                            article.title = self.find_in_descendants(
-                                article_view, "resource-id", "com.tencent.mm:id/qit"
-                            )[0].map.get("text", "")
-                            self.logger.info(f"Title: {article.title}")
-
-                            c3b_views = self.find_in_siblings(
-                                article_view, "resource-id", "com.tencent.mm:id/c3b"
-                            )
-
-                            if c3b_views:
-                                timestamp = parse_timestamp(
-                                    c3b_views[0].map.get("text", "")
-                                )
-                            else:
-                                # go up and down to reveal the timestamp
+                        def go_to_next_item():
+                            # go back to the profiles list
+                            self.bot.go_back()
+                            self.vc.dump()
+                            # click on the username again
+                            profile_item = self.vc.findViewWithText(username)
+                            profile_item.touch()
+                            self.vc.dump()
+                            # go to first article
+                            go_to_first_article()
+                            # now go up as many times as needed to get to the next article
+                            num_up_presses = articles_collected_in_profile
+                            for i in range(num_up_presses):
                                 self.bot.shell("input keyevent 19")
-                                time.sleep(0.1)
-                                self.bot.shell("input keyevent 20")
-                                time.sleep(0.1)
-                                self.vc.dump()
-                                article_view = self.vc.findViewWithAttribute(
-                                    "focused", "true"
-                                )
+
+                            self.vc.dump()
+
+                        # find the focused element
+                        focused_view = self.vc.findViewWithAttribute("focused", "true")
+
+                        # if we are on a message, skip it
+                        if (
+                            focused_view.map.get("resource-id", "")
+                            == "com.tencent.mm:id/bvo"
+                        ):  # this means we're on a "message"
+                            # get the timestamp - if it fails because it's not visible, we should be on the very first item in the feed
+                            self.logger.info("This is a message, skipping...")
+                            articles_collected_in_profile += 1  # todo: we're counting a skipped message as an article, fix this
+                            try:
                                 timestamp = parse_timestamp(
-                                    self.find_in_siblings(
-                                        article_view,
+                                    self.find_in_descendants(
+                                        focused_view,
                                         "resource-id",
                                         "com.tencent.mm:id/c3b",
-                                    )[0].map.get("text", "")
+                                    )[-1].map.get("text", "")
                                 )
-
-                            article.published_at = timestamp
-
-                        else:  # batch format
-                            article.published_at = parse_timestamp(timestamp_string)
-                            article.title = article_view.map.get("text", "")
-                            self.logger.info(f"Title: {article.title}")
-
-                        # Check if we should process this article
-                        if article_already_seen():
-                            profile_done = True
-                            break
-
-                        # Get the article URL
-                        try:
-                            article.url = self.process_article(article_view)
-                            time.sleep(0.1)
-
-                            # Store the article immediately after getting URL
-                            store_article(article)
-                        except Exception as e:
-                            self.logger.error(
-                                f"Error processing or storing article: {e}"
-                            )
-                            # Continue with next article even if this one fails
-
-                        # Update collection count
-                        articles_collected_in_profile += 1
-                        if max_articles:
-                            self.logger.info(
-                                f"Collected {articles_collected_in_profile}/{max_articles} articles in profile {username}"
-                            )
-                            if articles_collected_in_profile >= max_articles:
+                            except Exception as e:
                                 self.logger.info(
-                                    f"Maximum article limit reached, ending collection for this profile ({username})"
+                                    f"Couldn't get timestamp, assuming this is the first item in the feed (error: {e})"
                                 )
-
+                                profile_done = True
                                 break
-                        else:
-                            self.logger.info(
-                                f"Collected {articles_collected_in_profile} articles in profile {username}"
+
+                            if last_timestamp and last_timestamp == timestamp:
+                                self.logger.info(
+                                    "We're seeing the same message again, assuming we've reached the end of the feed..."
+                                )
+                                profile_done = True
+                                break
+                            last_timestamp = timestamp
+                            go_to_next_item()
+                            continue
+
+                        article_views = []
+                        is_batch = False
+
+                        # if we are on a batch of articles, process them one by one
+                        if self.find_in_descendants(
+                            focused_view, "resource-id", "com.tencent.mm:id/by9"
+                        ):
+                            is_batch = True
+                            # multiple articles under the same focused_view (bvm). ql4 is for the "hero" article, qit is used for those without thumbnails
+
+                            # do up and down to view the whole item with the timestamp
+                            self.bot.key_up()
+                            self.bot.key_down()
+                            self.vc.dump()
+
+                            article_views = self.find_in_descendants(
+                                focused_view, "resource-id", "com.tencent.mm:id/qit"
+                            )
+                            article_views += self.find_in_descendants(
+                                focused_view, "resource-id", "com.tencent.mm:id/ql4"
                             )
 
-                    if not profile_done:
-                        go_to_next_item()
+                            timestamp_string = self.find_in_descendants(
+                                focused_view.parent.parent,
+                                "resource-id",
+                                "com.tencent.mm:id/c3b",
+                            )[
+                                -1
+                            ].map.get(
+                                "text", ""
+                            )  # for some reason, c3b is not a child of the parent (even though it looks like it in appium inspector). So we go one level up and find all the c3b elements and take the last one, which should be the one that belongs to this batch
 
-                go_back_to_profiles()
+                        else:
+                            article_views = [focused_view]
 
-            # After breaking from article loop, these cleanup steps will run:
+                        for article_view in article_views:
+                            # Create article with required fields
+                            article = Article(account=username, title=None)
+
+                            def article_already_seen():
+                                if (
+                                    article.key in self.seen_articles
+                                    and article.key not in self.seen_articles_this_run
+                                ):
+                                    self.logger.info(
+                                        "Article already seen, moving to next profile"
+                                    )
+                                    return True
+                                if article.key in self.seen_articles_this_run:
+                                    self.logger.info(
+                                        "Reached previously seen article in this run, moving to next profile"
+                                    )
+                                    return True
+
+                            if not is_batch:
+                                article.title = self.find_in_descendants(
+                                    article_view, "resource-id", "com.tencent.mm:id/qit"
+                                )[0].map.get("text", "")
+                                self.logger.info(f"Title: {article.title}")
+
+                                c3b_views = self.find_in_siblings(
+                                    article_view, "resource-id", "com.tencent.mm:id/c3b"
+                                )
+
+                                if c3b_views:
+                                    timestamp = parse_timestamp(
+                                        c3b_views[0].map.get("text", "")
+                                    )
+                                else:
+                                    # go up and down to reveal the timestamp
+                                    self.bot.shell("input keyevent 19")
+                                    time.sleep(0.1)
+                                    self.bot.shell("input keyevent 20")
+                                    time.sleep(0.1)
+                                    self.vc.dump()
+                                    article_view = self.vc.findViewWithAttribute(
+                                        "focused", "true"
+                                    )
+                                    timestamp = parse_timestamp(
+                                        self.find_in_siblings(
+                                            article_view,
+                                            "resource-id",
+                                            "com.tencent.mm:id/c3b",
+                                        )[0].map.get("text", "")
+                                    )
+
+                                article.published_at = timestamp
+
+                            else:  # batch format
+                                article.published_at = parse_timestamp(timestamp_string)
+                                article.title = article_view.map.get("text", "")
+                                self.logger.info(f"Title: {article.title}")
+
+                            # Check if we should process this article
+                            if article_already_seen():
+                                profile_done = True
+                                break
+
+                            # Get the article URL
+                            try:
+                                article.url = self.process_article(article_view)
+                                time.sleep(0.1)
+
+                                # Store the article immediately after getting URL
+                                self.store_article(article)
+                            except Exception as e:
+                                self.logger.error(
+                                    f"Error processing or storing article: {e}"
+                                )
+                                # Continue with next article even if this one fails
+
+                            # Update collection count
+                            articles_collected_in_profile += 1
+                            if max_articles:
+                                self.logger.info(
+                                    f"Collected {articles_collected_in_profile}/{max_articles} articles in profile {username}"
+                                )
+                                if articles_collected_in_profile >= max_articles:
+                                    self.logger.info(
+                                        f"Maximum article limit reached, ending collection for this profile ({username})"
+                                    )
+
+                                    break
+                            else:
+                                self.logger.info(
+                                    f"Collected {articles_collected_in_profile} articles in profile {username}"
+                                )
+
+                        if not profile_done:
+                            go_to_next_item()
+
+                    go_back_to_profiles()
+
+            elif os.getenv("FEED_TYPE").lower() == "search":
+                self.logger.info("Getting articles from profiles found through search")
+
+                usernames = get_accounts()
+                self.logger.info(
+                    f"Found {len(usernames)} accounts to monitor: {usernames}"
+                )
+
+                for username in usernames:
+                    # navigate to search
+                    # todo: we can use the search icon on the previous screen
+
+                    # find by id
+                    search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
+                    search_icon_view.touch()
+                    time.sleep(0.1)
+                    self.vc.dump()
+
+                    # type the username
+                    self.bot.type(username)
+                    time.sleep(0.1)
+                    self.bot.enter()
+                    time.sleep(0.1)
+                    self.vc.dump()
+
+                    # tap the result
+                    result_view = self.vc.findViewWithAttributeThatMatches(
+                        "text", re.compile(r".*WeChat ID:.*$")
+                    )
+                    if result_view and username in result_view.getText():
+                        result_view.touch()
+                        time.sleep(0.1)
+                        self.vc.dump()
+                    else:
+                        self.logger.error(
+                            f"Cannot find result for username {username}, skipping..."
+                        )
+                        continue
+
+                    # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
+                    try:
+                        if (
+                            self.vc.findViewWithAttribute(
+                                "resource-id", "com.tencent.mm:id/acf"
+                            ).getText()
+                            == "Top"
+                        ):
+                            self.bot.key_down()
+                    except Exception:
+                        pass
+
+                    for article_index in range(max_articles):
+                        self.logger.info(
+                            f"Processing article {article_index + 1}/{max_articles}"
+                        )
+                        article = Article(account=username)
+                        self.bot.key_down()
+                        self.bot.enter()
+                        self.vc.dump()
+
+                        # check if we are on an article view
+                        article_view = self.vc.findViewWithAttribute(
+                            "resource-id", "com.tencent.mm:id/l2a"
+                        )
+                        if not article_view:
+                            # we probably tapped on the X articles remaining button, so we need to press down three times to get to the next article
+                            self.bot.key_down(3)
+                            self.bot.enter()
+                            self.vc.dump()
+
+                        # process the article
+                        metadata = self.process_article_inner()
+                        article.url = metadata["url"]
+                        article.title = metadata["title"]
+                        article.published_at = metadata["published_at"]
+                        self.store_article(article)
+
+                        # go back
+                        self.bot.go_back()
+                        time.sleep(0.1)
+
+                    # go back to the Official Accounts page
+                    self.bot.go_back(2)
+                    self.vc.dump()
+
+            else:
+                self.logger.error("Invalid feed type")
+                break
+
+            # After breaking from profiles loop, these cleanup steps will run:
             # Return to WeChat home page
             self.bot.go_back()
 
@@ -670,34 +774,39 @@ class WeChatFeedMonitor:
             else:
                 self.logger.error("Cannot find subscription tab")
 
-    def get_feed_articles_in_account_page(self):
-        """
-        Get the latest article list using ViewClient
-        """
-        self.vc.dump()
-        articles = []
 
-        # Find the ListView containing articles
-        list_view = self.vc.findViewWithAttribute("class", "android.widget.ListView")
-        if not list_view:
-            return []
+def get_accounts():
+    """
+    Get accounts from different sources in order of priority:
+    1. Command line arguments
+    2. Environment variable WECHAT_ACCOUNTS
+    3. accounts.txt file (one username per line)
+    """
+    # First check command line arguments
+    parser = argparse.ArgumentParser(description="WeChat Feed Monitor")
+    parser.add_argument(
+        "--accounts", nargs="+", help="List of WeChat accounts to monitor"
+    )
+    args = parser.parse_args()
 
-        # Get the last content box (latest articles)
-        content_boxes = list_view.children
-        if not content_boxes:
-            return []
+    if args.accounts:
+        return args.accounts
 
-        last_content_box = content_boxes[-1]
+    # Then check environment variable
+    accounts_env = os.getenv("WECHAT_ACCOUNTS")
+    if accounts_env:
+        return [acc.strip() for acc in accounts_env.split(",")]
 
-        # Extract article items
-        for article_view in last_content_box.children:
-            try:
-                bounds = article_view.getBounds()
-                articles.append(FeedArticleItem({"bounds": bounds}))
-            except Exception as e:
-                self.logger.exception(f"Error parsing article item: {e}")
+    # Finally check accounts.txt
+    accounts_file = Path("accounts.txt")
+    if accounts_file.exists():
+        with open(accounts_file, "r") as f:
+            # Read lines and strip whitespace, filter out empty lines
+            return [line.strip() for line in f if line.strip()]
 
-        return articles
+    raise ValueError(
+        "No accounts found. Please specify accounts via command line arguments, WECHAT_ACCOUNTS environment variable, or accounts.txt file (one username per line)."
+    )
 
 
 if __name__ == "__main__":

@@ -18,11 +18,11 @@ class ArticleDB:
                 CREATE TABLE IF NOT EXISTS articles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account TEXT NOT NULL,
-                    title TEXT NOT NULL,
+                    title TEXT,
                     published_at REAL NOT NULL,
                     timestamp REAL NOT NULL,
                     url TEXT NOT NULL UNIQUE,
-                    UNIQUE(account, title)
+                    UNIQUE(account, url)
                 )
             """)
             conn.commit()

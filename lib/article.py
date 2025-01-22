@@ -6,7 +6,7 @@ from typing import Optional
 @dataclass
 class Article:
     account: str
-    title: str
+    title: Optional[str] = None
     published_at: Optional[float] = None
     url: Optional[str] = None
     timestamp: float = None
