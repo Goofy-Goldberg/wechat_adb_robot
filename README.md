@@ -3,7 +3,7 @@ WAR: WeChat Automation Robot based on ADB
 Designed for Android WeChat app version 8.0.54.
 
 # What is WAR? & Why WAR?
-A WeChat automation script library based on [adb](https://developer.android.com/studio/command-line/adb), using pure click simulation. Supports Android devices and various operating systems that can use adb (tested on mac, ubuntu). Due to business requirements, current development mainly focuses on monitoring/scraping/operating official accounts/subscription accounts. More scripts can be added in the future, PRs welcome.
+A WeChat automation script library based on [adb](https://developer.android.com/studio/command-line/adb), using pure click simulation. Supports Android devices and various operating systems that can use adb.
 
 After exhausting various approaches like xposed, iPad/Mac protocols, web protocols, and WeChat hooks, we've returned to the old path of simulating human interaction. Simulating human interaction never gets banned!
 
@@ -16,7 +16,8 @@ After exhausting various approaches like xposed, iPad/Mac protocols, web protoco
     List of devices attached
     fe57c975        device
     ```
-3. Create a `.env` file with your device serial:
+3. Ensure [scrcpy](https://github.com/Genymobile/scrcpy) is installed, use `which scrcpy` to check
+4. Create a `.env` file with your device serial:
     ```
     DEVICE_SERIAL=your_device_serial
     PIN=your_device_pin  # Optional: if your device has a PIN lock
@@ -64,16 +65,3 @@ The script can monitor WeChat official accounts in two ways:
 - The script will automatically use the search flow when specific accounts are provided, and the followed accounts flow when no accounts are specified
 - The followed accounts flow is more complex due to various article display formats and may be less reliable
 - For best results, use the search flow with specific accounts
-
-# Update Info
-- 2019.06.27: Added support for new subscription page interface after version 6.7.3 (left screen in image below)
-  ![compare_v672_v673.jpeg](https://github.com/tommyyz/wechat_adb_robot/raw/master/compare_v672_v673.jpeg)
-
-# TODO List
-- [x] Monitor subscription list updates and get updated article list
-- [ ] Search and follow subscription accounts
-- [ ] Unfollow subscription accounts
-- [ ] Scrape historical articles from given list of official accounts
-- [ ] Batch add friends
-- [ ] Auto post to Moments
-- [ ] Tell me: yuhao6066@gmail.com
