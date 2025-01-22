@@ -1,3 +1,5 @@
+Portions of this software are copyright (c) 2019 Tom Zhu (https://github.com/tommyyz/wechat_adb_robot) and are licensed under the MIT License. The following is the license text:
+
 MIT License
 
 Copyright (c) 2019 Tom Zhu
