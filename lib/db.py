@@ -42,8 +42,14 @@ class ArticleDB:
         title: str,
         published_at: float,
         url: str,
-    ) -> bool:
-        """Add an article to the database if it doesn't exist"""
+    ) -> tuple[bool, str]:
+        """Add an article to the database if it doesn't exist
+
+        Returns:
+            tuple[bool, str]: (success, error_message)
+            - If successful: (True, "")
+            - If failed: (False, error_message)
+        """
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -55,11 +61,16 @@ class ArticleDB:
                     (account, title, published_at, time.time(), url),
                 )
                 conn.commit()
-                return True
+                return True, ""
         except sqlite3.IntegrityError as e:
-            # Article already exists (either duplicate URL or account+title combination) or some other error occurred
-            print(e)  # todo: use logger
-            return False
+            # Article already exists (either duplicate URL or account+url combination)
+            return False, f"Duplicate article: {str(e)}"
+        except sqlite3.Error as e:
+            # Other SQLite errors (connection issues, table problems, etc)
+            return False, f"Database error: {str(e)}"
+        except Exception as e:
+            # Unexpected errors
+            return False, f"Unexpected error: {str(e)}"
 
     def article_exists(self, account, title):
         """Check if an article exists in the database"""

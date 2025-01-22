@@ -14,6 +14,7 @@ from lib.article import Article
 from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from enum import Enum, auto
 
 
 class FeedArticleItem:
@@ -35,6 +36,14 @@ def bounds(view):
         "width": bounds[1][0] - bounds[0][0],
         "height": bounds[1][1] - bounds[0][1],
     }
+
+
+class ArticleStoreStatus(Enum):
+    SUCCESS = auto()
+    DUPLICATE = auto()
+    DATABASE_ERROR = auto()
+    INVALID_DATA = auto()  # For cases where article data is incomplete/invalid
+    UNEXPECTED_ERROR = auto()
 
 
 class WeChatFeedMonitor:
@@ -126,20 +135,42 @@ class WeChatFeedMonitor:
         return found
 
     def store_article(self, article):
-        # Store the article immediately after getting URL
-        if self.db.add_article(
+        """Store the article in the database and update seen_articles cache.
+
+        Returns:
+            ArticleStoreStatus: The status of the storage operation
+            - SUCCESS: Article was successfully added
+            - DUPLICATE: Article already exists in database
+            - DATABASE_ERROR: Database-related error occurred
+            - INVALID_DATA: Article data is invalid or incomplete
+            - UNEXPECTED_ERROR: Other unexpected errors
+        """
+        # Validate article data
+        if not all([article.account, article.title, article.published_at, article.url]):
+            self.logger.error("Invalid article data: missing required fields")
+            return ArticleStoreStatus.INVALID_DATA
+
+        success, error_msg = self.db.add_article(
             account=article.account,
             title=article.title,
             published_at=article.published_at,
             url=article.url,
-        ):
+        )
+
+        if success:
             self.seen_articles[article.key] = article
             self.logger.info("Article added to database.")
-            return True
+            return ArticleStoreStatus.SUCCESS
         else:
-            self.logger.info(
-                "Article already exists in database (duplicate URL), skipping"
-            )  # todo: this can be misleading if the actual error is something else
+            if "Duplicate article" in error_msg:
+                self.logger.info("Article already exists in database (duplicate URL)")
+                return ArticleStoreStatus.DUPLICATE
+            elif "Database error" in error_msg:
+                self.logger.error(f"Database error: {error_msg}")
+                return ArticleStoreStatus.DATABASE_ERROR
+            else:
+                self.logger.error(f"Unexpected error: {error_msg}")
+                return ArticleStoreStatus.UNEXPECTED_ERROR
 
     def process_article_inner(self):
         """
@@ -226,21 +257,31 @@ class WeChatFeedMonitor:
         """
         Process an article by clicking on it and then copying the link
         Accepts a view object to click to open the article
-        Returns the URL of the article
+        Returns the URL of the article or raises an exception if processing fails
         """
-        self.logger.info("Opening article")
-        self.bot.tap_bounds(view_to_click_to_open)
-        self.bot.tap_bounds(
-            view_to_click_to_open
-        )  # todo: check why double tap is needed
-        time.sleep(0.1)
+        try:
+            self.logger.info("Opening article")
+            self.bot.tap_bounds(view_to_click_to_open)
+            self.bot.tap_bounds(
+                view_to_click_to_open
+            )  # todo: check why double tap is needed
+            time.sleep(0.1)
 
-        product = self.process_article_inner()
+            product = self.process_article_inner()
 
-        self.bot.go_back()
-        time.sleep(0.5)
+            self.bot.go_back()
+            time.sleep(0.5)
 
-        return product["url"]
+            if not product.get("url"):
+                raise ValueError("No URL found in processed article")
+
+            return product["url"]
+        except Exception as e:
+            self.logger.error(f"Failed to process article: {str(e)}")
+            # Go back to ensure we're in the right state for the next article
+            self.bot.go_back()
+            time.sleep(0.5)
+            raise  # Re-raise the exception to be handled by the caller
 
     def run(self, skip_first_batch=True):
         """
@@ -403,7 +444,30 @@ class WeChatFeedMonitor:
                         article.published_at = metadata["published_at"]
                         self.logger.info(article)
                         self.logger.info("Storing article...")
-                        self.store_article(article)
+                        status = self.store_article(article)
+                        if status == ArticleStoreStatus.SUCCESS:
+                            articles_collected += 1
+                        elif status == ArticleStoreStatus.DUPLICATE:
+                            self.logger.info(
+                                "Article already exists in database (duplicate URL), moving to the next profile..."
+                            )
+                            self.bot.go_back()
+                            time.sleep(0.1)
+                            break
+                        elif status == ArticleStoreStatus.DATABASE_ERROR:
+                            self.logger.warning(
+                                "Database error occurred, retrying in 5 seconds..."
+                            )
+                            time.sleep(5)
+                            continue
+                        elif status == ArticleStoreStatus.INVALID_DATA:
+                            self.logger.warning("Skipping article due to invalid data")
+                            continue
+                        else:  # UNEXPECTED_ERROR
+                            self.logger.error(
+                                "Unexpected error occurred while storing article"
+                            )
+                            continue
 
                         # go back
                         self.bot.go_back()
@@ -700,7 +764,31 @@ class WeChatFeedMonitor:
                                 time.sleep(0.1)
 
                                 # Store the article immediately after getting URL
-                                self.store_article(article)
+                                status = self.store_article(article)
+                                if status == ArticleStoreStatus.SUCCESS:
+                                    articles_collected_in_profile += 1
+                                elif status == ArticleStoreStatus.DUPLICATE:
+                                    self.logger.info(
+                                        "Article already exists in database (duplicate URL)"
+                                    )
+                                    profile_done = True
+                                    break
+                                elif status == ArticleStoreStatus.DATABASE_ERROR:
+                                    self.logger.warning(
+                                        "Database error occurred, retrying in 5 seconds..."
+                                    )
+                                    time.sleep(5)
+                                    continue
+                                elif status == ArticleStoreStatus.INVALID_DATA:
+                                    self.logger.warning(
+                                        "Skipping article due to invalid data"
+                                    )
+                                    continue
+                                else:  # UNEXPECTED_ERROR
+                                    self.logger.error(
+                                        "Unexpected error occurred while storing article"
+                                    )
+                                    continue
                             except Exception as e:
                                 self.logger.error(
                                     f"Error processing or storing article: {e}"
