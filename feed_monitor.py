@@ -255,6 +255,15 @@ class WeChatFeedMonitor:
             max_articles = None
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
+        # Get accounts - if provided, use search flow, otherwise use followed accounts flow
+        accounts = self.get_accounts()
+        if accounts:
+            self.logger.info(
+                f"Found {len(accounts)} accounts to monitor via search: {accounts}"
+            )
+        else:
+            self.logger.info("No accounts provided, monitoring followed accounts")
+
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
@@ -309,7 +318,89 @@ class WeChatFeedMonitor:
 
             self.vc.dump()
 
-            if os.getenv("FEED_TYPE").lower() == "followed":
+            if accounts:  # Search flow
+                for username in accounts:
+                    # navigate to search
+                    # todo: we can use the search icon on the previous screen
+
+                    # find by id
+                    search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
+                    search_icon_view.touch()
+                    time.sleep(0.1)
+                    self.vc.dump()
+
+                    # type the username
+                    self.bot.type(username)
+                    time.sleep(0.1)
+                    self.bot.enter()
+                    time.sleep(0.1)
+                    self.vc.dump()
+
+                    # tap the result
+                    result_view = self.vc.findViewWithAttributeThatMatches(
+                        "text", re.compile(r".*WeChat ID:.*$")
+                    )
+                    if result_view and username in result_view.getText():
+                        result_view.touch()
+                        time.sleep(0.1)
+                        self.vc.dump()
+                    else:
+                        self.logger.error(
+                            f"Cannot find result for username {username}, skipping..."
+                        )
+                        continue
+
+                    # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
+                    try:
+                        if (
+                            self.vc.findViewWithAttribute(
+                                "resource-id", "com.tencent.mm:id/acf"
+                            ).getText()
+                            == "Top"
+                        ):
+                            self.bot.key_down()
+                    except Exception:
+                        pass
+
+                    for article_index in range(max_articles):
+                        self.logger.info(
+                            f"Processing article {article_index + 1}/{max_articles}"
+                        )
+                        article = Article(account=username)
+                        self.bot.key_down()
+                        self.bot.enter()
+                        self.vc.dump()
+
+                        # check if we are on an article view
+                        article_view = self.vc.findViewWithAttribute(
+                            "resource-id", "com.tencent.mm:id/l2a"
+                        )
+                        if not article_view:
+                            # we probably tapped on the X articles remaining button, so we need to press down three times to get to the next article
+                            self.bot.key_down(3)
+                            self.bot.enter()
+                            self.vc.dump()
+
+                        # process the article
+                        metadata = self.process_article_inner()
+                        article.url = metadata["url"]
+                        article.title = metadata["title"]
+                        article.published_at = metadata["published_at"]
+                        self.store_article(article)
+
+                        # go back
+                        self.bot.go_back()
+                        time.sleep(0.1)
+
+                    # go back to the Official Accounts page
+                    self.bot.go_back(2)
+                    self.vc.dump()
+
+            else:  # Followed accounts flow
+                self.logger.warning(
+                    "No accounts provided, monitoring followed accounts only. This is not fully implemented due to the complexity of the feed page (various article display formats) and may result in errors."
+                )
+
                 usernames = [
                     username_view.map.get("text", "")
                     for username_view in self.vc.findViewsWithAttribute(
@@ -621,95 +712,6 @@ class WeChatFeedMonitor:
 
                     go_back_to_profiles()
 
-            elif os.getenv("FEED_TYPE").lower() == "search":
-                self.logger.info("Getting articles from profiles found through search")
-
-                usernames = get_accounts()
-                self.logger.info(
-                    f"Found {len(usernames)} accounts to monitor: {usernames}"
-                )
-
-                for username in usernames:
-                    # navigate to search
-                    # todo: we can use the search icon on the previous screen
-
-                    # find by id
-                    search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
-                    search_icon_view.touch()
-                    time.sleep(0.1)
-                    self.vc.dump()
-
-                    # type the username
-                    self.bot.type(username)
-                    time.sleep(0.1)
-                    self.bot.enter()
-                    time.sleep(0.1)
-                    self.vc.dump()
-
-                    # tap the result
-                    result_view = self.vc.findViewWithAttributeThatMatches(
-                        "text", re.compile(r".*WeChat ID:.*$")
-                    )
-                    if result_view and username in result_view.getText():
-                        result_view.touch()
-                        time.sleep(0.1)
-                        self.vc.dump()
-                    else:
-                        self.logger.error(
-                            f"Cannot find result for username {username}, skipping..."
-                        )
-                        continue
-
-                    # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
-                    try:
-                        if (
-                            self.vc.findViewWithAttribute(
-                                "resource-id", "com.tencent.mm:id/acf"
-                            ).getText()
-                            == "Top"
-                        ):
-                            self.bot.key_down()
-                    except Exception:
-                        pass
-
-                    for article_index in range(max_articles):
-                        self.logger.info(
-                            f"Processing article {article_index + 1}/{max_articles}"
-                        )
-                        article = Article(account=username)
-                        self.bot.key_down()
-                        self.bot.enter()
-                        self.vc.dump()
-
-                        # check if we are on an article view
-                        article_view = self.vc.findViewWithAttribute(
-                            "resource-id", "com.tencent.mm:id/l2a"
-                        )
-                        if not article_view:
-                            # we probably tapped on the X articles remaining button, so we need to press down three times to get to the next article
-                            self.bot.key_down(3)
-                            self.bot.enter()
-                            self.vc.dump()
-
-                        # process the article
-                        metadata = self.process_article_inner()
-                        article.url = metadata["url"]
-                        article.title = metadata["title"]
-                        article.published_at = metadata["published_at"]
-                        self.store_article(article)
-
-                        # go back
-                        self.bot.go_back()
-                        time.sleep(0.1)
-
-                    # go back to the Official Accounts page
-                    self.bot.go_back(2)
-                    self.vc.dump()
-
-            else:
-                self.logger.error("Invalid feed type")
-                break
-
             # After breaking from profiles loop, these cleanup steps will run:
             # Return to WeChat home page
             self.bot.go_back()
@@ -774,39 +776,39 @@ class WeChatFeedMonitor:
             else:
                 self.logger.error("Cannot find subscription tab")
 
+    def get_accounts(self):
+        """
+        Get accounts from different sources in order of priority:
+        1. Command line arguments
+        2. Environment variable WECHAT_ACCOUNTS
+        3. accounts.txt file (one username per line)
+        Returns None if no accounts are found.
+        """
+        # First check command line arguments
+        parser = argparse.ArgumentParser(description="WeChat Feed Monitor")
+        parser.add_argument(
+            "--accounts", nargs="+", help="List of WeChat accounts to monitor"
+        )
+        args = parser.parse_args()
 
-def get_accounts():
-    """
-    Get accounts from different sources in order of priority:
-    1. Command line arguments
-    2. Environment variable WECHAT_ACCOUNTS
-    3. accounts.txt file (one username per line)
-    """
-    # First check command line arguments
-    parser = argparse.ArgumentParser(description="WeChat Feed Monitor")
-    parser.add_argument(
-        "--accounts", nargs="+", help="List of WeChat accounts to monitor"
-    )
-    args = parser.parse_args()
+        if args.accounts:
+            return args.accounts
 
-    if args.accounts:
-        return args.accounts
+        # Then check environment variable
+        accounts_env = os.getenv("WECHAT_ACCOUNTS")
+        if accounts_env:
+            return [acc.strip() for acc in accounts_env.split(",")]
 
-    # Then check environment variable
-    accounts_env = os.getenv("WECHAT_ACCOUNTS")
-    if accounts_env:
-        return [acc.strip() for acc in accounts_env.split(",")]
+        # Finally check accounts.txt
+        accounts_file = Path("accounts.txt")
+        if accounts_file.exists():
+            with open(accounts_file, "r") as f:
+                # Read lines and strip whitespace, filter out empty lines
+                accounts = [line.strip() for line in f if line.strip()]
+                if accounts:
+                    return accounts
 
-    # Finally check accounts.txt
-    accounts_file = Path("accounts.txt")
-    if accounts_file.exists():
-        with open(accounts_file, "r") as f:
-            # Read lines and strip whitespace, filter out empty lines
-            return [line.strip() for line in f if line.strip()]
-
-    raise ValueError(
-        "No accounts found. Please specify accounts via command line arguments, WECHAT_ACCOUNTS environment variable, or accounts.txt file (one username per line)."
-    )
+        return None
 
 
 if __name__ == "__main__":
