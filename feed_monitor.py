@@ -148,7 +148,7 @@ class WeChatFeedMonitor:
         """
 
         # Process the article
-        self.logger.info("Processing article...")
+        self.logger.info("Getting article metadata...")
         time.sleep(0.5)
 
         metadata = {}
@@ -204,7 +204,7 @@ class WeChatFeedMonitor:
                 self.logger.error("Cannot find copy link button, retrying...")
                 raise Exception("Cannot find copy link button")
 
-            self.logger.info(f"Clipboard: {clipboard_new}")
+            self.logger.debug(f"Clipboard: {clipboard_new}")
 
             if not clipboard_new.startswith("https://"):
                 self.logger.error("Clipboard does not contain a valid URL")
@@ -287,17 +287,21 @@ class WeChatFeedMonitor:
             # Check if skip app opening is not true - useful for debugging to skip the long navigation to the feed page, if you can ensure you're on the right page
             if not os.getenv("SKIP_APP_OPENING", "").lower() == "true":
                 # Turn screen off and on again
+                self.logger.info("Turning screen off and on again")
                 self.bot.screen_off()
                 self.bot.screen_on()
 
                 if os.getenv("PIN"):
+                    self.logger.info("PIN provided, unlocking device")
                     self.bot.unlock()
 
                 # Return to home screen
+                self.logger.info("Going to home screen")
                 self.bot.go_home()
-                time.sleep(0.1)
+                time.sleep(0.5)
 
                 # Open WeChat home page
+                self.logger.info("Opening WeChat home page")
                 self.ensure_wechat_front()
                 time.sleep(0.1)
 
@@ -330,7 +334,7 @@ class WeChatFeedMonitor:
             self.vc.dump()
 
             if accounts:  # Search flow
-                for username in accounts:
+                for username_index, username in enumerate(accounts, start=1):
                     # navigate to search
                     # todo: we can use the search icon on the previous screen
 
@@ -375,7 +379,7 @@ class WeChatFeedMonitor:
 
                     for article_index in range(max_articles):
                         self.logger.info(
-                            f"Processing article {article_index + 1}/{max_articles}"
+                            f"Processing article {article_index + 1}/{max_articles} (account: {username}, {username_index}/{len(accounts)})"
                         )
                         article = Article(account=username)
                         self.bot.key_down()
@@ -397,6 +401,8 @@ class WeChatFeedMonitor:
                         article.url = metadata["url"]
                         article.title = metadata["title"]
                         article.published_at = metadata["published_at"]
+                        self.logger.info(article)
+                        self.logger.info("Storing article...")
                         self.store_article(article)
 
                         # go back
