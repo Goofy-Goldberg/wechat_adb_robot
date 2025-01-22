@@ -250,9 +250,20 @@ class WeChatFeedMonitor:
         """
         loop_index = 0
         articles_collected = 0
-        max_articles = int(os.getenv("MAX_ARTICLES"), 0)  # per profile
-        if max_articles == 0:
-            max_articles = None
+        max_articles = os.getenv("MAX_ARTICLES")
+        if max_articles is None:
+            max_articles = 10  # default to 10 articles per profile
+        else:
+            try:
+                max_articles = int(max_articles)
+                if max_articles <= 0:
+                    max_articles = 10  # if they provided 0 or negative, use default
+            except ValueError:
+                self.logger.warning(
+                    f"Invalid MAX_ARTICLES value: {max_articles}, using default of 10"
+                )
+                max_articles = 10
+
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
         # Get accounts - if provided, use search flow, otherwise use followed accounts flow

@@ -8,7 +8,7 @@ A WeChat automation script library based on [adb](https://developer.android.com/
 After exhausting various approaches like xposed, iPad/Mac protocols, web protocols, and WeChat hooks, we've returned to the old path of simulating human interaction. Simulating human interaction never gets banned!
 
 # Quick Start
-#### Preparation
+### Preparation
 1. Connect Android device via USB, enable debugging in developer mode, check "Allow debugging" and "Allow simulated clicks" in the device's developer options.
 2. Ensure [adb](https://developer.android.com/studio/command-line/adb) command is available, use `adb devices` to get `serial` (phone serial number)
     ```shell
@@ -16,45 +16,54 @@ After exhausting various approaches like xposed, iPad/Mac protocols, web protoco
     List of devices attached
     fe57c975        device
     ```
+3. Create a `.env` file with your device serial:
+    ```
+    DEVICE_SERIAL=your_device_serial
+    PIN=your_device_pin  # Optional: if your device has a PIN lock
+    MAX_ARTICLES=10      # Number of articles to collect per profile (default: 10)
+    COLLECTION_TIMEOUT=30 # Optional: seconds to wait between collection loops
+    ```
 
-#### Script 1: Subscription Account Monitor `/examples/feed_monitor.py`
-1. Install clipper
-    ```
-    $ adb -s fe57c975 install apks/clipper1.2.1.apk
-    ```
-2. Monitor subscription/official account updates (must be followed) and get updated article list
-    ```python
-    from wechat_adb_robot.scripts.feed_monitor import WeChatFeedMonitor
-    from wechat_adb_robot.lib.utils import new_stream_logger
+### Running the Script
+The script can monitor WeChat official accounts in two ways:
 
-    def push_result(url):
-        print("Got new article url, push to db:", url)
+1. **Monitor Specific Accounts**
+   You can specify accounts to monitor in three ways:
 
-    monitor = WeChatFeedMonitor(serial="fe57c975",
-                                result_callback=push_result,
-                                adb_path="adb",
-                                logger=new_stream_logger())
-    monitor.run(skip_first_batch=False)  # skip_first_batch=True to skip update detection in first loop
-    ```
-3. Running results:
-    ```
-    [14:46:57][INFO][root] => Starting loop 0
-    [14:47:12][INFO][root] => Recently updated official accounts: ['金融宽课', '越甲策市', '招商汽车研究', 'IPP评论', '中国教育新闻网', '随手札记', '市川新田三丁目', '中金点睛']
-    [14:47:28][INFO][root] => Output result: https://mp.weixin.qq.com/s/mPxaA9oGK5X3FNBWb2aeVQ
-    [14:47:44][INFO][root] => Output result: https://mp.weixin.qq.com/s/YhQtDCRCPnhpplkWA6YtGQ
-    [14:48:00][INFO][root] => Output result: https://mp.weixin.qq.com/s/Jm16fIMycBs4YT_Wn62apw
-    
-    ...
+   a. Command line arguments:
+   ```bash
+   python feed_monitor.py --accounts chinaemb_mu chinaemb_rw SputnikNews
+   ```
 
-    [14:50:58][INFO][root] => Starting loop 1
-    [14:51:14][INFO][root] => Recently updated official accounts: []
-    [14:51:46][INFO][root] => Starting loop 2
-    [14:52:01][INFO][root] => Recently updated official accounts: []
-    [14:52:34][INFO][root] => Starting loop 3
-    
-    ...
-    ```
-    ![example.gif](https://github.com/tommyyz/wechat_adb_robot/raw/master/example.gif)
+   b. Environment variable (in .env file or exported):
+   ```bash
+   WECHAT_ACCOUNTS=chinaemb_mu,chinaemb_rw,SputnikNews
+   ```
+
+   c. Text file (accounts.txt):
+   ```
+   chinaemb_mu
+   chinaemb_rw
+   SputnikNews
+   ```
+
+   The script checks for accounts in this order of priority:
+   1. Command line arguments
+   2. WECHAT_ACCOUNTS environment variable
+   3. accounts.txt file
+
+2. **Monitor Followed Accounts** (not recommended)
+   - Simply run the script without specifying any accounts:
+     ```bash
+     python feed_monitor.py
+     ```
+   - This will monitor all accounts you follow in WeChat
+   - This is not recommended as the implementation is imperfect due to the complexity of the feed page (various article display formats) and may result in errors
+
+### Notes
+- The script will automatically use the search flow when specific accounts are provided, and the followed accounts flow when no accounts are specified
+- The followed accounts flow is more complex due to various article display formats and may be less reliable
+- For best results, use the search flow with specific accounts
 
 # Update Info
 - 2019.06.27: Added support for new subscription page interface after version 6.7.3 (left screen in image below)
