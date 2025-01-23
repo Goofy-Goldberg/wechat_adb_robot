@@ -11,7 +11,7 @@ After exhausting various approaches like xposed, iPad/Mac protocols, web protoco
 ### Preparation
 1. Connect Android device via USB, enable debugging in developer mode, check "Allow debugging" and "Allow simulated clicks" in the device's developer options.
 2. Ensure [adb](https://developer.android.com/studio/command-line/adb) command is available
-3. Ensure [scrcpy](https://github.com/Genymobile/scrcpy) is installed, use `which scrcpy` to check
+3. Ensure [scrcpy](https://github.com/Genymobile/scrcpy) is installed, use `which scrcpy` to check. Scrcpy is used to sync the clipboard, to copy article URLs.
 4. Optionally create a `.env` file with specific settings:
 
     ```
@@ -19,6 +19,9 @@ After exhausting various approaches like xposed, iPad/Mac protocols, web protoco
     COLLECTION_TIMEOUT=30               # Optional: seconds to wait between collection loops
     PIN=your_device_pin                 # Optional: if your device has a PIN lock
     DEVICE_SERIAL=your_device_serial    # Optional: if you want to specify a specific device. Otherwise, the script will use the first device listed by `adb devices`. Serial is the string after `device` in `adb devices` output.
+    SKIP_APP_OPENING=false              # Optional: to speed things up in dev, skips getting to the Followed Accounts page in the app
+    SKIP_SCRCPY=true                    # Optional: if you want to run your own instance of scrcpy (default: false)
+    HEADLESS=true                       # Optional: if you want to run scrcpy in headless mode. This will probably break URL retrieval (clipboard sync) (default: false)
     ```
 
 ### Running the Script

@@ -2,6 +2,7 @@ import subprocess
 import os
 import logging
 from contextlib import contextmanager
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +20,21 @@ def manage_scrcpy(serial: str):
         # Only launch scrcpy if SKIP_SCRCPY is not set to "true"
         if not os.getenv("SKIP_SCRCPY", "").lower() == "true":
             logger.info("Starting scrcpy in background...")
-            scrcpy_process = subprocess.Popen(
-                ["scrcpy", "-d"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            # Give scrcpy time to initialize
-            import time
 
+            args = ["scrcpy", "-s", serial]
+
+            if os.getenv("HEADLESS", "").lower() == "true":
+                args.append(
+                    "--no-window"
+                )  # in headless mode, scrcpy doesn't seem to be able to sync the clipboard
+
+            scrcpy_process = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # Give scrcpy time to initialize
             time.sleep(2)
 
         yield

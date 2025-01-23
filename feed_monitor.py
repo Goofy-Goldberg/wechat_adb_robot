@@ -163,7 +163,7 @@ class WeChatFeedMonitor:
             return ArticleStoreStatus.SUCCESS
         else:
             if "Duplicate article" in error_msg:
-                self.logger.info("Article already exists in database (duplicate URL)")
+                # self.logger.info("Article already exists in database (duplicate URL)")
                 return ArticleStoreStatus.DUPLICATE
             elif "Database error" in error_msg:
                 self.logger.error(f"Database error: {error_msg}")
@@ -382,7 +382,16 @@ class WeChatFeedMonitor:
 
                     # find by id
                     search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
-                    search_icon_view.touch()
+                    try:
+                        search_icon_view.touch()
+                    except ViewNotFoundException:
+                        # sometimes we need a longer delay to get the view
+                        time.sleep(1)
+                        self.vc.dump()
+                        search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
+                        search_icon_view.touch()
+                        continue
+
                     time.sleep(0.1)
                     self.vc.dump()
 
@@ -833,7 +842,7 @@ class WeChatFeedMonitor:
 
             # Apply collection timeout
             self.logger.info(
-                f"Waiting {collection_timeout:.1f}s before next collection loop"
+                f"Waiting {collection_timeout}s before next collection loop"
             )
             time.sleep(collection_timeout)
 
