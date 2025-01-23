@@ -373,6 +373,7 @@ class WeChatFeedMonitor:
                     )
 
             self.vc.dump()
+            time.sleep(0.5)
 
             if accounts:  # Search flow
                 for username_index, username in enumerate(accounts, start=1):
@@ -389,7 +390,7 @@ class WeChatFeedMonitor:
                     self.bot.type(username)
                     time.sleep(0.1)
                     self.bot.enter()
-                    time.sleep(0.1)
+                    time.sleep(0.5)
                     self.vc.dump()
 
                     # tap the result
@@ -921,11 +922,23 @@ if __name__ == "__main__":
 
     device_serial = os.getenv("DEVICE_SERIAL")
     if not device_serial:
-        raise ValueError("DEVICE_SERIAL not found in .env file")
+        # Get first connected device from adb devices output
+        adb_output = (
+            os.popen("adb devices").read().strip().split("\n")[1:]
+        )  # Skip first line (header)
+        connected_devices = [
+            line.split()[0] for line in adb_output if line.strip() and "device" in line
+        ]
 
-    from lib.scrcpy import manage_scrcpy
+        if not connected_devices:
+            raise ValueError(
+                "No devices connected. Please connect a device or provide DEVICE_SERIAL in .env file"
+            )
 
-    with manage_scrcpy():
+        device_serial = connected_devices[0]
+        print(f"Using first connected device: {device_serial}")
+
+    with manage_scrcpy(device_serial):
         monitor = WeChatFeedMonitor(
             serial=device_serial,
             adb_path="adb",

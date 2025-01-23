@@ -7,7 +7,12 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def manage_scrcpy():
+def manage_scrcpy(serial: str):
+    if not serial:
+        raise ValueError(
+            "Couldn't launch scrcpy: didn't get device serial"
+        )  # todo: more informative
+
     scrcpy_process = None
 
     try:
