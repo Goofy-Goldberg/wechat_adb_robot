@@ -175,6 +175,7 @@ class WeChatFeedMonitor:
     def process_article_inner(self):
         """
         The actual processing of an article when already on the article page
+        # todo: rename the functions or refactor to make it less confusing
         Returns URL of the article
         """
 
@@ -186,6 +187,9 @@ class WeChatFeedMonitor:
 
         metadata["title"] = self.vc.findViewById("activity-name").getText()
         published_at = self.vc.findViewById("publish_time").getText()
+        metadata["op_display_name"] = (
+            self.vc.findViewById("js_name").children[0].getText()
+        )
 
         # parse published_at - the format is like 2025年01月22日 08:08
         local_dt = datetime.strptime(published_at, "%Y年%m月%d日 %H:%M")
@@ -290,19 +294,15 @@ class WeChatFeedMonitor:
         So this script simulates human behavior by turning screen on/off, which works well in practice
         """
         loop_index = 0
-        articles_collected = 0
         max_articles = os.getenv("MAX_ARTICLES")
         if max_articles is None:
-            max_articles = 10  # default to 10 articles per profile
+            max_articles = 10
         else:
             try:
                 max_articles = int(max_articles)
                 if max_articles <= 0:
-                    max_articles = 10  # if they provided 0 or negative, use default
+                    max_articles = 10
             except ValueError:
-                self.logger.warning(
-                    f"Invalid MAX_ARTICLES value: {max_articles}, using default of 10"
-                )
                 max_articles = 10
 
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
@@ -319,11 +319,6 @@ class WeChatFeedMonitor:
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
         while True:
             self.logger.info("Starting loop {}".format(loop_index))
-
-            # Check if we've hit the article limit
-            if max_articles and articles_collected >= max_articles:
-                self.logger.info(f"Reached maximum article limit of {max_articles}")
-                break
 
             # Check if skip app opening is not true - useful for debugging to skip the long navigation to the feed page, if you can ensure you're on the right page
             if not os.getenv("SKIP_APP_OPENING", "").lower() == "true":
@@ -382,15 +377,13 @@ class WeChatFeedMonitor:
 
                     # find by id
                     search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
-                    try:
-                        search_icon_view.touch()
-                    except ViewNotFoundException:
+                    while not search_icon_view:
                         # sometimes we need a longer delay to get the view
+                        self.logger.info("Waiting for search icon view...")
                         time.sleep(1)
                         self.vc.dump()
                         search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
-                        search_icon_view.touch()
-                        continue
+                    search_icon_view.touch()
 
                     time.sleep(0.1)
                     self.vc.dump()
@@ -404,8 +397,8 @@ class WeChatFeedMonitor:
 
                     # tap the result
                     result_view = self.vc.findViewWithAttributeThatMatches(
-                        "text", re.compile(r".*WeChat ID:.*$")
-                    )
+                        "text", re.compile(r".*WeChat ID:.*$", re.IGNORECASE)
+                    )  # todo! this is actually still case sensitive. Loop through all elements and check directly if needed
                     if result_view and username in result_view.getText():
                         result_view.touch()
                         time.sleep(0.1)
@@ -414,6 +407,9 @@ class WeChatFeedMonitor:
                         self.logger.error(
                             f"Cannot find result for username {username}, skipping..."
                         )
+                        self.bot.go_back()
+                        time.sleep(0.1)
+                        self.vc.dump()
                         continue
 
                     # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
@@ -427,6 +423,15 @@ class WeChatFeedMonitor:
                             self.bot.key_down()
                     except Exception:
                         pass
+
+                    display_name_view = self.vc.findViewById("com.tencent.mm:id/atj")
+                    if display_name_view:
+                        display_name = display_name_view.getText()
+                        self.logger.info(f"Display name: {display_name}")
+                    else:
+                        self.logger.error(
+                            "Cannot find display name view, won't be able to check if articles are reposted"
+                        )
 
                     for article_index in range(max_articles):
                         self.logger.info(
@@ -449,6 +454,8 @@ class WeChatFeedMonitor:
 
                         # process the article
                         metadata = self.process_article_inner()
+                        if display_name != metadata["op_display_name"]:
+                            self.logger.info("Article is a repost...")
                         article.url = metadata["url"]
                         article.title = metadata["title"]
                         article.published_at = metadata["published_at"]
@@ -456,7 +463,7 @@ class WeChatFeedMonitor:
                         self.logger.info("Storing article...")
                         status = self.store_article(article)
                         if status == ArticleStoreStatus.SUCCESS:
-                            articles_collected += 1
+                            pass
                         elif status == ArticleStoreStatus.DUPLICATE:
                             self.logger.info(
                                 "Article already exists in database (duplicate URL), moving to the next profile..."
