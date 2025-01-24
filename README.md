@@ -32,15 +32,15 @@ The script can monitor WeChat official accounts in two ways:
 
    a. Command line arguments:
    ```bash
-   python feed_monitor.py --accounts chinaemb_mu chinaemb_rw SputnikNews
+   python feed_monitor.py --usernames chinaemb_mu chinaemb_rw SputnikNews
    ```
 
    b. Environment variable (in .env file or exported):
    ```bash
-   WECHAT_ACCOUNTS=chinaemb_mu,chinaemb_rw,SputnikNews
+   USERNAMES=chinaemb_mu,chinaemb_rw,SputnikNews
    ```
 
-   c. Text file (accounts.txt):
+   c. Text file (usernames.txt):
    ```
    chinaemb_mu
    chinaemb_rw

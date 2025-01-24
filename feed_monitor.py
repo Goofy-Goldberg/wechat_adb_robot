@@ -308,7 +308,7 @@ class WeChatFeedMonitor:
         collection_timeout = int(os.getenv("COLLECTION_TIMEOUT", "30"))  # in seconds
 
         # Get accounts - if provided, use search flow, otherwise use followed accounts flow
-        accounts = self.get_accounts()
+        accounts = self.get_usernames()
         if accounts:
             self.logger.info(
                 f"Found {len(accounts)} accounts to monitor via search: {accounts}"
@@ -396,18 +396,35 @@ class WeChatFeedMonitor:
                     self.vc.dump()
 
                     # tap the result
-                    result_view = self.vc.findViewWithAttributeThatMatches(
-                        "text", re.compile(r".*WeChat ID:.*$", re.IGNORECASE)
-                    )  # todo! this is actually still case sensitive. Loop through all elements and check directly if needed
-                    if result_view and username in result_view.getText():
-                        result_view.touch()
-                        time.sleep(0.1)
-                        self.vc.dump()
-                    else:
+
+                    # note: we would use the following, but it's actually still case sensitive
+                    # result_view = self.vc.findViewWithAttributeThatMatches(
+                    #     "text", re.compile(r".*WeChat ID:.*$", re.IGNORECASE)
+                    # )
+                    # if result_view and username in result_view.getText():
+                    #     result_view.touch()
+                    #     time.sleep(0.1)
+                    #     self.vc.dump()
+
+                    found_result = False
+                    views_by_id = self.vc.getViewsById()
+                    for view in views_by_id:
+                        if text := views_by_id[view].getText():
+                            if (
+                                "WeChat ID:" in text
+                                and username.lower() in text.lower()
+                            ):
+                                views_by_id[view].touch()
+                                time.sleep(0.1)
+                                self.vc.dump()
+                                found_result = True
+                                break
+
+                    if not found_result:
                         self.logger.error(
                             f"Cannot find result for username {username}, skipping..."
                         )
-                        self.bot.go_back()
+                        self.bot.go_back()  # need to dismiss the keyboard too
                         time.sleep(0.1)
                         self.vc.dump()
                         continue
@@ -437,7 +454,7 @@ class WeChatFeedMonitor:
                         self.logger.info(
                             f"Processing article {article_index + 1}/{max_articles} (account: {username}, {username_index}/{len(accounts)})"
                         )
-                        article = Article(account=username)
+                        article = Article(username=username)
                         self.bot.key_down()
                         self.bot.enter()
                         self.vc.dump()
@@ -714,7 +731,7 @@ class WeChatFeedMonitor:
 
                         for article_view in article_views:
                             # Create article with required fields
-                            article = Article(account=username, title=None)
+                            article = Article(username=username, title=None)
 
                             def article_already_seen():
                                 if (
@@ -898,7 +915,7 @@ class WeChatFeedMonitor:
             else:
                 self.logger.error("Cannot find subscription tab")
 
-    def get_accounts(self):
+    def get_usernames(self):
         """
         Get accounts from different sources in order of priority:
         1. Command line arguments
@@ -909,26 +926,28 @@ class WeChatFeedMonitor:
         # First check command line arguments
         parser = argparse.ArgumentParser(description="WeChat Feed Monitor")
         parser.add_argument(
-            "--accounts", nargs="+", help="List of WeChat accounts to monitor"
+            "--usernames",
+            nargs="+",
+            help="List of WeChat accounts (usernames) to monitor",
         )
         args = parser.parse_args()
 
-        if args.accounts:
-            return args.accounts
+        if args.usernames:
+            return args.usernames
 
         # Then check environment variable
-        accounts_env = os.getenv("WECHAT_ACCOUNTS")
-        if accounts_env:
-            return [acc.strip() for acc in accounts_env.split(",")]
+        usernames_env = os.getenv("USERNAMES")
+        if usernames_env:
+            return [acc.strip() for acc in usernames_env.split(",")]
 
-        # Finally check accounts.txt
-        accounts_file = Path("accounts.txt")
-        if accounts_file.exists():
-            with open(accounts_file, "r") as f:
+        # Finally check usernames.txt
+        usernames_file = Path("usernames.txt")
+        if usernames_file.exists():
+            with open(usernames_file, "r") as f:
                 # Read lines and strip whitespace, filter out empty lines
-                accounts = [line.strip() for line in f if line.strip()]
-                if accounts:
-                    return accounts
+                usernames = [line.strip() for line in f if line.strip()]
+                if usernames:
+                    return usernames
 
         return None
 

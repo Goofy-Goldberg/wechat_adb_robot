@@ -5,7 +5,7 @@ from typing import Optional
 
 @dataclass
 class Article:
-    account: str
+    username: str
     title: Optional[str] = None
     published_at: Optional[float] = None
     url: Optional[str] = None
@@ -18,12 +18,12 @@ class Article:
     @property
     def key(self) -> str:
         """Unique identifier for the article"""
-        return f"{self.account}:{self.title}"
+        return f"{self.username}:{self.title}"
 
     def to_dict(self) -> dict:
         """Convert to dictionary for database storage"""
         return {
-            "account": self.account,
+            "username": self.username,
             "title": self.title,
             "published_at": self.published_at,
             "url": self.url,
