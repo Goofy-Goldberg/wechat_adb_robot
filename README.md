@@ -10,7 +10,24 @@ After exhausting various approaches like xposed, iPad/Mac protocols, web protoco
 ### Installation
 This project was set up using [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
-I recommend using it to install the dependencies etc. - just run `uv sync` and it should create a virtual environment, activate it, and install the dependencies.
+I recommend using it to install the dependencies etc. - just run `uv sync` and it should create a virtual environment and install the dependencies. (You should still activate the virtual environment yourself as usual - `./.venv/bin/activate`).
+
+#### Note:
+
+On first run, you may see warnings like these:
+
+```
+/Users/user/Tools/wechat_adb_robot/.venv/lib/python3.13/site-packages/com/dtmilano/android/common.py:35: SyntaxWarning: invalid escape sequence '\d'
+  return '(?P<%s>\d+)' % name
+/Users/user/Tools/wechat_adb_robot/.venv/lib/python3.13/site-packages/com/dtmilano/android/common.py:56: SyntaxWarning: invalid escape sequence '\S'
+  return '(?P<%s>\S+%s)' % (name, '' if greedy else '?')
+/Users/user/Tools/wechat_adb_robot/.venv/lib/python3.13/site-packages/com/dtmilano/android/common.py:128: SyntaxWarning: invalid escape sequence '\P'
+  possibleChoices.append(os.path.join("""C:\Program Files\Android\android-sdk\platform-tools""", adb))
+/Users/user/Tools/wechat_adb_robot/.venv/lib/python3.13/site-packages/com/dtmilano/android/common.py:129: SyntaxWarning: invalid escape sequence '\P'
+  possibleChoices.append(os.path.join("""C:\Program Files (x86)\Android\android-sdk\platform-tools""", adb))
+```
+
+These seem to be harmless in our case and can be ignored.
 
 ### Preparation
 1. Connect Android device via USB, enable debugging in developer mode, check "Allow debugging" and "Allow simulated clicks" in the device's developer options.
@@ -60,6 +77,7 @@ The script can monitor WeChat official accounts in two ways:
    - This is not recommended as the implementation is imperfect due to the complexity of the feed page (various article display formats) and may result in errors
 
 ### Notes
+- Usernames (Weixin IDs) are not case-sensitive
 - The script will automatically use the search flow when specific accounts are provided (i.e. no need to follow the accounts first), and the followed accounts flow when no accounts are specified
 - The followed accounts flow is more complex due to various article display formats and may be less reliable
 - For best results, use the search flow with specific accounts
