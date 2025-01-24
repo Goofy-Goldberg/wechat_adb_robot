@@ -10,6 +10,8 @@ class Article:
     published_at: Optional[float] = None
     url: Optional[str] = None
     timestamp: float = None
+    display_name: Optional[str] = None
+    id: Optional[int] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -28,6 +30,8 @@ class Article:
             "published_at": self.published_at,
             "url": self.url,
             "timestamp": self.timestamp,
+            "display_name": self.display_name,
+            "id": self.id,
         }
 
     @classmethod

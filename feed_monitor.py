@@ -146,15 +146,18 @@ class WeChatFeedMonitor:
             - UNEXPECTED_ERROR: Other unexpected errors
         """
         # Validate article data
-        if not all([article.account, article.title, article.published_at, article.url]):
+        if not all(
+            [article.username, article.title, article.published_at, article.url]
+        ):
             self.logger.error("Invalid article data: missing required fields")
             return ArticleStoreStatus.INVALID_DATA
 
         success, error_msg = self.db.add_article(
-            account=article.account,
+            username=article.username,
             title=article.title,
             published_at=article.published_at,
             url=article.url,
+            display_name=article.display_name,
         )
 
         if success:
@@ -476,6 +479,7 @@ class WeChatFeedMonitor:
                         article.url = metadata["url"]
                         article.title = metadata["title"]
                         article.published_at = metadata["published_at"]
+                        article.display_name = metadata["op_display_name"]
                         self.logger.info(article)
                         self.logger.info("Storing article...")
                         status = self.store_article(article)
