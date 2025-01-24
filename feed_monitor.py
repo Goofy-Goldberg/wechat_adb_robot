@@ -1,7 +1,6 @@
 # coding:utf-8
 import time
 import os
-import re
 import argparse
 from com.dtmilano.android.viewclient import ViewClient, AdbClient, ViewNotFoundException
 from dotenv import load_dotenv
