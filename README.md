@@ -7,6 +7,11 @@ A WeChat automation script library based on [adb](https://developer.android.com/
 After exhausting various approaches like xposed, iPad/Mac protocols, web protocols, and WeChat hooks, we've returned to the old path of simulating human interaction. Simulating human interaction never gets banned!
 
 ## Quick Start
+### Installation
+This project was set up using [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+I recommend using it to install the dependencies etc. - just run `uv sync` and it should create a virtual environment, activate it, and install the dependencies.
+
 ### Preparation
 1. Connect Android device via USB, enable debugging in developer mode, check "Allow debugging" and "Allow simulated clicks" in the device's developer options.
 2. Ensure [adb](https://developer.android.com/studio/command-line/adb) command is available
