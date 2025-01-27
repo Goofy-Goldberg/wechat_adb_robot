@@ -12,6 +12,9 @@ class Article:
     timestamp: float = None
     display_name: Optional[str] = None
     id: Optional[int] = None
+    repost: bool = False
+    op_display_name: Optional[str] = None
+    op_username: Optional[str] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -32,6 +35,9 @@ class Article:
             "timestamp": self.timestamp,
             "display_name": self.display_name,
             "id": self.id,
+            "repost": self.repost,
+            "op_display_name": self.op_display_name,
+            "op_username": self.op_username,
         }
 
     @classmethod

@@ -320,7 +320,7 @@ class WeChatFeedMonitor:
 
         # Main loop - reinitiate the app, navigate to the feed page, scroll up to the top
         while True:
-            self.logger.info("Starting loop {}".format(loop_index))
+            self.logger.info(f"Starting loop {loop_index + 1}")
 
             # Check if skip app opening is not true - useful for debugging to skip the long navigation to the feed page, if you can ensure you're on the right page
             if not os.getenv("SKIP_APP_OPENING", "").lower() == "true":
@@ -379,7 +379,18 @@ class WeChatFeedMonitor:
 
                     # find by id
                     search_icon_view = self.vc.findViewById("com.tencent.mm:id/g7")
+                    retry_count = 0
                     while not search_icon_view:
+                        retry_count += 1
+                        if retry_count == 4:
+                            self.logger.info("Try to go back and retry...")
+                            self.bot.go_back()
+                            self.vc.dump()
+                        if retry_count == 5:
+                            self.logger.error(
+                                "Cannot find search icon view, ending loop..."
+                            )
+                            break
                         # sometimes we need a longer delay to get the view
                         self.logger.info("Waiting for search icon view...")
                         time.sleep(1)
@@ -408,28 +419,44 @@ class WeChatFeedMonitor:
                     #     time.sleep(0.1)
                     #     self.vc.dump()
 
-                    found_result = False
-                    views_by_id = self.vc.getViewsById()
-                    for view in views_by_id:
-                        if text := views_by_id[view].getText():
-                            if (
-                                "WeChat ID:" in text
-                                and username.lower() in text.lower()
-                            ):
-                                views_by_id[view].touch()
-                                time.sleep(0.1)
-                                self.vc.dump()
-                                found_result = True
-                                break
+                    def find_result_view_and_tap():
+                        views_by_id = self.vc.getViewsById()
+                        for view in views_by_id:
+                            if text := views_by_id[view].getText():
+                                if (
+                                    "WeChat ID:" in text
+                                    and username.lower() in text.lower()
+                                ):
+                                    views_by_id[view].touch()
+                                    time.sleep(0.1)
+                                    self.vc.dump()
+                                    return True
+
+                    found_result = find_result_view_and_tap()
 
                     if not found_result:
-                        self.logger.error(
-                            f"Cannot find result for username {username}, skipping..."
+                        # check if there is any view with the text "Official Accounts,按钮,2之2" - that's the tab heading that sometimes appears to narrow down the search results
+                        filter_tab_view = self.vc.findViewWithText(
+                            "Official Accounts,按钮,2之2"
                         )
-                        self.bot.go_back()  # need to dismiss the keyboard too
-                        time.sleep(0.1)
-                        self.vc.dump()
-                        continue
+                        if filter_tab_view:
+                            self.logger.info("Found filter tab button, tapping...")
+                            filter_tab_view.touch()
+                            time.sleep(0.1)
+                            self.vc.dump()
+                            found_result = find_result_view_and_tap()
+
+                            # todo!: this may not work - sometimes searching for the username just doesn't return the official account in the results. E.g. qh_d778d44cc6f3 fails but 中国驻法兰克福总领事馆 (the display name) works. We need to add a fallback to search by display name and also supply it in usernames.txt (so it should be renamed back to accounts.txt)
+
+                        if not found_result:
+                            # todo: investigate, sometimes results are not loaded - probably should hit enter again
+                            self.logger.error(
+                                f"Cannot find result for username {username}, skipping..."
+                            )
+                            self.bot.go_back()  # todo: need to dismiss the keyboard too sometimes
+                            time.sleep(0.1)
+                            self.vc.dump()
+                            continue
 
                     # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
                     try:
@@ -475,6 +502,10 @@ class WeChatFeedMonitor:
                         metadata = self.process_article_inner()
                         if display_name != metadata["op_display_name"]:
                             self.logger.info("Article is a repost...")
+                            self.article_op_display_name = metadata[
+                                "op_display_name"
+                            ]  # todo: retreive the username by going to the profile
+                        article.repost = True
                         article.url = metadata["url"]
                         article.title = metadata["title"]
                         article.published_at = metadata["published_at"]

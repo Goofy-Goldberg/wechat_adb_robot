@@ -17,6 +17,9 @@ class Article(BaseModel):
     timestamp: float
     url: str
     display_name: Optional[str] = None
+    repost: bool = False
+    op_display_name: Optional[str] = None
+    op_username: Optional[str] = None
 
 
 @app.get("/articles/", response_model=List[Article])

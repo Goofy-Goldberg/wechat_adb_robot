@@ -35,6 +35,24 @@ class ArticleDB:
                 if "display_name" not in columns:  # Need to add display_name
                     cursor.execute("ALTER TABLE articles ADD COLUMN display_name TEXT")
                     conn.commit()
+
+                if "repost" not in columns:  # Need to add repost flag
+                    cursor.execute(
+                        "ALTER TABLE articles ADD COLUMN repost BOOLEAN DEFAULT FALSE"
+                    )
+                    conn.commit()
+
+                if (
+                    "op_display_name" not in columns
+                ):  # Need to add original poster display name
+                    cursor.execute(
+                        "ALTER TABLE articles ADD COLUMN op_display_name TEXT"
+                    )
+                    conn.commit()
+
+                if "op_username" not in columns:  # Need to add original poster username
+                    cursor.execute("ALTER TABLE articles ADD COLUMN op_username TEXT")
+                    conn.commit()
             else:
                 # Create new table with updated schema
                 cursor.execute("""
@@ -46,6 +64,9 @@ class ArticleDB:
                         timestamp REAL NOT NULL,
                         url TEXT NOT NULL UNIQUE,
                         display_name TEXT,
+                        repost BOOLEAN DEFAULT FALSE,
+                        op_display_name TEXT,
+                        op_username TEXT,
                         UNIQUE(username, url)
                     )
                 """)
@@ -67,6 +88,9 @@ class ArticleDB:
         published_at: float,
         url: str,
         display_name: Optional[str] = None,
+        repost: bool = False,
+        op_display_name: Optional[str] = None,
+        op_username: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Add an article to the database if it doesn't exist
 
@@ -80,10 +104,20 @@ class ArticleDB:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO articles (username, title, published_at, timestamp, url, display_name)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO articles (username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (username, title, published_at, time.time(), url, display_name),
+                    (
+                        username,
+                        title,
+                        published_at,
+                        time.time(),
+                        url,
+                        display_name,
+                        repost,
+                        op_display_name,
+                        op_username,
+                    ),
                 )
                 conn.commit()
                 return True, ""
@@ -116,7 +150,7 @@ class ArticleDB:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, username, title, published_at, timestamp, url, display_name
+                SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
                 FROM articles 
                 WHERE username = ? AND title = ?
                 """,
@@ -132,6 +166,9 @@ class ArticleDB:
                     "timestamp": row[4],
                     "url": row[5],
                     "display_name": row[6],
+                    "repost": bool(row[7]),
+                    "op_display_name": row[8],
+                    "op_username": row[9],
                 }
             return None
 
@@ -140,7 +177,7 @@ class ArticleDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT username, title, published_at, timestamp, url, display_name FROM articles"
+                "SELECT username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username FROM articles"
             )
             articles = {}
             for row in cursor.fetchall():
@@ -152,6 +189,9 @@ class ArticleDB:
                     "timestamp": row[3],
                     "url": row[4],
                     "display_name": row[5],
+                    "repost": bool(row[6]),
+                    "op_display_name": row[7],
+                    "op_username": row[8],
                 }
             return articles
 
@@ -170,7 +210,7 @@ class ArticleDB:
             if username and after_id:
                 cursor.execute(
                     """
-                    SELECT id, username, title, published_at, timestamp, url, display_name
+                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
                     FROM articles 
                     WHERE username = ? AND id > ?
                     ORDER BY timestamp DESC
@@ -181,7 +221,7 @@ class ArticleDB:
             elif username:
                 cursor.execute(
                     """
-                    SELECT id, username, title, published_at, timestamp, url, display_name
+                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
                     FROM articles 
                     WHERE username = ?
                     ORDER BY timestamp DESC
@@ -192,7 +232,7 @@ class ArticleDB:
             elif after_id:
                 cursor.execute(
                     """
-                    SELECT id, username, title, published_at, timestamp, url, display_name
+                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
                     FROM articles 
                     WHERE id > ?
                     ORDER BY timestamp DESC
@@ -203,7 +243,7 @@ class ArticleDB:
             else:
                 cursor.execute(
                     """
-                    SELECT id, username, title, published_at, timestamp, url, display_name
+                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
                     FROM articles 
                     ORDER BY timestamp DESC
                     LIMIT ? OFFSET ?
@@ -220,6 +260,9 @@ class ArticleDB:
                     "timestamp": row[4],
                     "url": row[5],
                     "display_name": row[6],
+                    "repost": bool(row[7]),
+                    "op_display_name": row[8],
+                    "op_username": row[9],
                 }
                 for row in cursor.fetchall()
             ]

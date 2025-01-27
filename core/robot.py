@@ -89,6 +89,10 @@ class ADBRobot:
         if not self.is_screen_on():
             self.shell("input keyevent 26")
 
+    def screenshot(self):
+        self.shell("screencap -p /sdcard/screenshot.png")
+        self.shell("pull /sdcard/screenshot.png")
+
     def unlock(self):
         # adb shell input text XXXX && adb shell input keyevent 66
         pin = os.getenv("PIN")
@@ -123,6 +127,7 @@ class ADBRobot:
         self.go_home()
 
     def go_back(self, num_times=1):
+        self.screenshot()
         for _ in range(num_times):
             self.shell("input keyevent 4")
             time.sleep(0.1)
