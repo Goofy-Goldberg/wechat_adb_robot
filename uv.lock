@@ -521,6 +521,7 @@ dependencies = [
     { name = "lxml" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "uvicorn" },
 ]
 
@@ -531,5 +532,6 @@ requires-dist = [
     { name = "lxml", specifier = ">=5.3.0" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "requests", specifier = ">=2.32.3" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]
