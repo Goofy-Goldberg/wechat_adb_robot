@@ -14,63 +14,26 @@ class ArticleDB:
         """Initialize the database and create tables if they don't exist"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # First check if we need to migrate from old schema
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='articles'"
-            )
-            table_exists = cursor.fetchone() is not None
-
-            if table_exists:
-                # Check if we need to migrate from old schema
-                cursor.execute("PRAGMA table_info(articles)")
-                columns = [col[1] for col in cursor.fetchall()]
-
-                if "account" in columns:  # Need to migrate
-                    # Rename account to username
-                    cursor.execute(
-                        "ALTER TABLE articles RENAME COLUMN account TO username"
-                    )
-                    conn.commit()
-
-                if "display_name" not in columns:  # Need to add display_name
-                    cursor.execute("ALTER TABLE articles ADD COLUMN display_name TEXT")
-                    conn.commit()
-
-                if "repost" not in columns:  # Need to add repost flag
-                    cursor.execute(
-                        "ALTER TABLE articles ADD COLUMN repost BOOLEAN DEFAULT FALSE"
-                    )
-                    conn.commit()
-
-                if (
-                    "op_display_name" not in columns
-                ):  # Need to add original poster display name
-                    cursor.execute(
-                        "ALTER TABLE articles ADD COLUMN op_display_name TEXT"
-                    )
-                    conn.commit()
-
-                if "op_username" not in columns:  # Need to add original poster username
-                    cursor.execute("ALTER TABLE articles ADD COLUMN op_username TEXT")
-                    conn.commit()
-            else:
-                # Create new table with updated schema
-                cursor.execute("""
-                    CREATE TABLE articles (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        username TEXT NOT NULL,
-                        title TEXT,
-                        published_at REAL NOT NULL,
-                        timestamp REAL NOT NULL,
-                        url TEXT NOT NULL UNIQUE,
-                        display_name TEXT,
-                        repost BOOLEAN DEFAULT FALSE,
-                        op_display_name TEXT,
-                        op_username TEXT,
-                        UNIQUE(username, url)
-                    )
-                """)
-                conn.commit()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS articles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    title TEXT,
+                    published_at REAL NOT NULL,
+                    timestamp REAL NOT NULL,
+                    url TEXT NOT NULL UNIQUE,
+                    display_name TEXT,
+                    repost BOOLEAN DEFAULT FALSE,
+                    op_display_name TEXT,
+                    op_username TEXT,
+                    content TEXT,
+                    author TEXT,
+                    publish_time TEXT,
+                    scraped_at REAL,
+                    UNIQUE(username, url)
+                )
+            """)
+            conn.commit()
 
     @contextmanager
     def _get_connection(self):

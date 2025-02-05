@@ -43,38 +43,39 @@ These seem to be harmless in our case and can be ignored.
     SKIP_APP_OPENING=true               # To speed things up in dev, skips getting to the Followed Accounts page in the app (default: false)
     SKIP_SCRCPY=true                    # If you want to run your own instance of scrcpy (default: false)
     HEADLESS=true                       # If you want to run scrcpy in headless mode. This will probably break URL retrieval (clipboard sync) (default: false)
+    ES_HOST=localhost                  # Elasticsearch host (default: localhost)
+    ES_PORT=9200                       # Elasticsearch port (default: 9200)
+    ES_USERNAME=elastic               # Elasticsearch username (optional)
+    ES_PASSWORD=changeme             # Elasticsearch password (optional)
+    ES_VERIFY_CERTS=false           # Whether to verify SSL certificates (default: false)
     ```
 
 ### Running the Script
-The script can monitor WeChat official accounts in two ways:
+The script can monitor WeChat official accounts in three ways:
 
-1. **Monitor Specific Accounts**
-   You can specify accounts to monitor in three ways, and the script will check for them in this order of priority:
-
-   a. Command line arguments:
+1. **Command Line Arguments**
    ```bash
    python feed_monitor.py --usernames chinaemb_mu chinaemb_rw SputnikNews
    ```
 
-   b. Environment variable (in .env file or exported):
+2. **Environment Variable**
+   In your `.env` file or exported:
    ```bash
    USERNAMES=chinaemb_mu,chinaemb_rw,SputnikNews
    ```
 
-   c. Text file (usernames.txt):
+3. **Elasticsearch**
+   If you have Elasticsearch configured (via environment variables), the script will fetch accounts from the `accounts` index. Each document in the index should have a `username` field.
+
+4. **Text File**
+   Create a `usernames.txt` file with one username per line:
    ```
    chinaemb_mu
    chinaemb_rw
    SputnikNews
    ```
 
-2. **Monitor Followed Accounts** (not recommended)
-   - Simply run the script without specifying any accounts:
-     ```bash
-     python feed_monitor.py
-     ```
-   - This will monitor all accounts you follow in WeChat
-   - This is not recommended as the implementation is imperfect due to the complexity of the feed page (various article display formats) and may result in errors
+If no accounts are specified through any of these methods, the script will monitor all accounts you follow in WeChat (not recommended).
 
 ### Notes
 - Usernames (Weixin IDs) are not case-sensitive
@@ -195,6 +196,27 @@ curl "http://localhost:8000/usernames/"
 ```
 
 # Tips
+
+## Environment Variables
+
+Create a `.env` file with specific settings (all are optional as they have defaults):
+
+```
+MAX_ARTICLES=10                     # Number of articles to collect per profile (default: 10)
+COLLECTION_TIMEOUT=30               # Seconds to wait between collection loops
+PIN=<your_device_pin>               # If your device has a PIN lock (default: none)
+DEVICE_SERIAL=<your_device_serial>  # If you want to run the script on a specific device. Otherwise, the script will use the first device listed by `adb devices`. Serial is the string after `device` in `adb devices` output. (default: none)
+SKIP_APP_OPENING=true               # To speed things up in dev, skips getting to the Followed Accounts page in the app (default: false)
+SKIP_SCRCPY=true                    # If you want to run your own instance of scrcpy (default: false)
+HEADLESS=true                       # If you want to run scrcpy in headless mode. This will probably break URL retrieval (clipboard sync) (default: false)
+
+# Elasticsearch configuration (optional)
+ES_HOST=localhost                  # Elasticsearch host (default: localhost)
+ES_PORT=9200                       # Elasticsearch port (default: 9200)
+ES_USERNAME=elastic               # Elasticsearch username (optional)
+ES_PASSWORD=changeme             # Elasticsearch password (optional)
+ES_VERIFY_CERTS=false           # Whether to verify SSL certificates (default: false)
+```
 
 ## ADB over WiFi
 

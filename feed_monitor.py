@@ -189,9 +189,13 @@ class WeChatFeedMonitor:
 
         metadata["title"] = self.vc.findViewById("activity-name").getText()
         published_at = self.vc.findViewById("publish_time").getText()
-        metadata["op_display_name"] = (
-            self.vc.findViewById("js_name").children[0].getText()
-        )
+        try:
+            metadata["op_display_name"] = (
+                self.vc.findViewById("js_name").children[0].getText()
+            )
+        except Exception as e:
+            self.logger.error(f"Error getting op_display_name: {e}")
+            metadata["op_display_name"] = None
 
         # parse published_at - the format is like 2025年01月22日 08:08
         local_dt = datetime.strptime(published_at, "%Y年%m月%d日 %H:%M")
@@ -954,7 +958,8 @@ class WeChatFeedMonitor:
         Get accounts from different sources in order of priority:
         1. Command line arguments
         2. Environment variable WECHAT_ACCOUNTS
-        3. accounts.txt file (one username per line)
+        3. Elasticsearch (if configured)
+        4. accounts.txt file (one username per line)
         Returns None if no accounts are found.
         """
         # First check command line arguments
@@ -973,6 +978,55 @@ class WeChatFeedMonitor:
         usernames_env = os.getenv("USERNAMES")
         if usernames_env:
             return [acc.strip() for acc in usernames_env.split(",")]
+
+        # Check Elasticsearch if configured
+        es_host = os.getenv("ES_HOST")
+        es_port = os.getenv("ES_PORT")
+        if es_host and es_port:
+            try:
+                import requests
+                import urllib3
+
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+                protocol = "https"  # Always use SSL as per sync_to_es.py
+                verify_certs = os.getenv("ES_VERIFY_CERTS", "false").lower() == "true"
+
+                # Get authentication credentials if provided
+                username = os.getenv("ES_USERNAME")
+                password = os.getenv("ES_PASSWORD")
+                auth = (username, password) if username and password else None
+
+                # Query Elasticsearch for accounts
+                url = f"{protocol}://{es_host}:{es_port}/accounts/_search"
+                query = {
+                    "query": {"match_all": {}},
+                    "_source": ["username"],
+                    "size": 10000,  # Adjust if you have more than 10000 accounts
+                }
+
+                response = requests.post(
+                    url, json=query, verify=verify_certs, auth=auth
+                )
+
+                if response.status_code == 200:
+                    hits = response.json().get("hits", {}).get("hits", [])
+                    usernames = [
+                        hit["_source"]["username"]
+                        for hit in hits
+                        if "username" in hit["_source"]
+                    ]
+                    if usernames:
+                        self.logger.info(
+                            f"Found {len(usernames)} accounts in Elasticsearch"
+                        )
+                        return usernames
+                else:
+                    self.logger.error(
+                        f"Failed to fetch accounts from Elasticsearch: {response.text}"
+                    )
+            except Exception as e:
+                self.logger.error(f"Error fetching accounts from Elasticsearch: {e}")
 
         # Finally check usernames.txt
         usernames_file = Path("usernames.txt")
