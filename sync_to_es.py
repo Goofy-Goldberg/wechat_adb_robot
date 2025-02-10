@@ -7,6 +7,7 @@ import requests
 import urllib3
 from dotenv import load_dotenv
 from lib.db import ArticleDB
+import base64
 
 # Suppress SSL verification warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -101,8 +102,8 @@ def sync_to_elasticsearch():
     error_count = 0
 
     for article_key, article_data in articles_dict.items():
-        # Add the key as id for ES
-        doc_id = article_key.replace(":", "_")  # ES doesn't like colons in IDs
+        # Create a safe document ID using base64 encoding
+        doc_id = base64.urlsafe_b64encode(article_key.encode()).decode().rstrip("=")
 
         es_doc = prepare_article_for_es(article_data)
 
