@@ -11,10 +11,21 @@ puppeteer.use(StealthPlugin());
 
 // Database setup
 async function getDb() {
-    return open({
+    const db = await open({
         filename: 'articles.db',
         driver: sqlite3.Database
     });
+
+    // Add metadata column if it doesn't exist
+    try {
+        await db.get('SELECT metadata FROM articles LIMIT 1');
+    } catch (error) {
+        if (error.message.includes('no such column')) {
+            await db.exec('ALTER TABLE articles ADD COLUMN metadata TEXT');
+        }
+    }
+
+    return db;
 }
 
 async function getUnscrapedArticles(db) {
@@ -29,19 +40,50 @@ async function getUnscrapedArticles(db) {
 }
 
 async function updateArticleContent(db, url, articleData) {
-    const now = Date.now() / 1000; // Convert to Unix timestamp
+    const now = Date.now() / 1000;
+    
+    // Separate core fields from metadata
+    const {
+        title,
+        author,
+        content,
+        publishTime,
+        url: originalUrl,
+        // Fields that will go into metadata
+        description,
+        ogImage,
+        biz,
+        sn,
+        mid,
+        idx,
+        ...otherFields
+    } = articleData;
+
+    // Construct metadata object
+    const metadata = {
+        description,
+        ogImage,
+        biz,
+        sn,
+        mid,
+        idx,
+        ...otherFields
+    };
+
     await db.run(`
         UPDATE articles 
         SET content = ?, 
             author = ?, 
-            publish_time = ?,
-            scraped_at = ?
+            published_at = ?,
+            scraped_at = ?,
+            metadata = ?
         WHERE url = ?
     `, [
-        articleData.content,
-        articleData.author,
-        articleData.publishTime,
+        content,
+        author,
+        publishTime,
         now,
+        JSON.stringify(metadata),
         url
     ]);
 }
@@ -85,26 +127,110 @@ async function scrapeArticle(url) {
         });
         console.log('Page loaded with status:', response.status());
 
-        // Wait for the content to be available
-        await page.waitForFunction('window.cgiData !== undefined', { timeout: 10000 })
-            .catch(e => console.log('Warning: cgiData not found after timeout'));
-
         console.log('Evaluating page content...');
         const articleData = await page.evaluate(() => {
             console.log('Inside page.evaluate');
-            const data = window.cgiData || {};
-            console.log('cgiData:', JSON.stringify(data));
-            debugger;
+            
+            function getPublishDate() {
+                // Try visible publish time first
+                const publishTimeElement = document.querySelector("#publish_time");
+                if (publishTimeElement) {
+                    const timeText = publishTimeElement.textContent.trim();
+                    // Parse Chinese format: 2025年01月30日 08:19
+                    const match = timeText.match(/(\d{4})年(\d{2})月(\d{2})日\s*(\d{2}):(\d{2})/);
+                    if (match) {
+                        const [_, year, month, day, hours, minutes] = match;
+                        // Create a date object in local timezone
+                        const localDate = new Date(year, month - 1, day, hours, minutes);
+                        // Convert to UTC timestamp in seconds
+                        return Math.floor(localDate.getTime() / 1000);
+                    }
+                    return null; // Return null if parsing fails
+                }
+
+                // If not visible, try to get from script
+                const script = document.querySelector('script[nonce][reportloaderror]');
+                if (script && script.textContent) {
+                    const match = script.textContent.match(/var create_time = "(\d+)" \* 1;/);
+                    if (match && match[1]) {
+                        const timestamp = parseInt(match[1], 10);
+                        if (!isNaN(timestamp)) {
+                            return timestamp; // This is already a UTC timestamp
+                        }
+                    }
+                }
+                return null;
+            }
+
+            function getMetaData() {
+                const scriptElements = document.querySelectorAll('script[nonce][reportloaderror]');
+                const metaData = {
+                    biz: null,
+                    sn: null,
+                    mid: null,
+                    idx: null
+                };
+
+                scriptElements.forEach(script => {
+                    if (script.textContent.includes("var biz =") && script.textContent.includes("var sn =")) {
+                        const bizMatch = script.textContent.match(/var biz = "([^"]*)"/);
+                        if (bizMatch) metaData.biz = bizMatch[1];
+                        
+                        const snMatch = script.textContent.match(/var sn = "([^"]*)"/);
+                        if (snMatch) metaData.sn = snMatch[1];
+                        
+                        const midMatch = script.textContent.match(/var mid = "([^"]*)"/);
+                        if (midMatch) metaData.mid = midMatch[1];
+                        
+                        const idxMatch = script.textContent.match(/var idx = "([^"]*)"/);
+                        if (idxMatch) metaData.idx = idxMatch[1];
+                    }
+                });
+
+                return metaData;
+            }
+
+            // Get content with better error handling
+            const contentElement = document.querySelector("#js_content");
+            const content = contentElement ? contentElement.textContent.trim() : null;
+
+            // Get title with better error handling
+            const titleElement = document.querySelector("#activity-name");
+            const title = titleElement ? titleElement.textContent.trim() : null;
+
+            // Get author with better error handling
+            const authorElement = document.querySelector("#js_name");
+            const author = authorElement ? authorElement.textContent.trim() : null;
+
+            // Get description
+            const descriptionElement = document.querySelector('meta[name="description"]');
+            const description = descriptionElement ? descriptionElement.getAttribute("content") : null;
+
+            // Get og:image
+            const ogImageElement = document.querySelector('meta[property="og:image"]');
+            const ogImage = ogImageElement ? ogImageElement.getAttribute("content") : null;
+
+            const publishTime = getPublishDate();
+            const metaData = getMetaData();
+
+            console.log('Extracted data:', { title, author, publishTime, content: content?.substring(0, 100) + '...' });
+
             return {
-                title: data.title,
-                author: data.author,
-                content: data.content,
-                publishTime: data.publishTime,
+                title,
+                author,
+                content,
+                publishTime,
+                description,
+                ogImage,
+                ...metaData,
                 originalUrl: window.location.href,
             };
         });
 
-        console.log('Article data extracted:', articleData);
+        console.log('Article data extracted:', {
+            ...articleData,
+            content: articleData.content?.substring(0, 100) + '...' // Only log first 100 chars of content
+        });
 
         // Connect to database and update the article
         const db = await getDb();
