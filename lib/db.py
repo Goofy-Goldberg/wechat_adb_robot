@@ -72,7 +72,7 @@ class ArticleDB:
         title_translated: Optional[str] = None,
         metadata: Optional[str] = None,
     ) -> tuple[bool, str]:
-        """Add an article to the database if it doesn't exist
+        """Add or update an article in the database
 
         Args:
             username: The account username
@@ -93,11 +93,27 @@ class ArticleDB:
         Returns:
             tuple[bool, str]: (success, error_message)
             - If successful: (True, "")
-            - If failed: (False, error_message)
+            - If duplicate: (False, "Duplicate article: {url}")
+            - If database error: (False, "Database error: {error}")
+            - If other error: (False, "Unexpected error: {error}")
         """
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
+
+                # First check if article exists
+                cursor.execute(
+                    """
+                    SELECT url FROM articles 
+                    WHERE (username = ? AND title = ?) OR url = ?
+                    """,
+                    (username, title, url),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    return False, f"Duplicate article: {existing[0]}"
+
+                # If we get here, article doesn't exist, so insert it
                 cursor.execute(
                     """
                     INSERT INTO articles (
@@ -128,8 +144,62 @@ class ArticleDB:
                 )
                 conn.commit()
                 return True, ""
-        except sqlite3.IntegrityError as e:
-            return False, f"Duplicate article: {str(e)}"
+        except sqlite3.Error as e:
+            return False, f"Database error: {str(e)}"
+        except Exception as e:
+            return False, f"Unexpected error: {str(e)}"
+
+    def update_article(
+        self, username: str, title: str, url: str, **kwargs
+    ) -> tuple[bool, str]:
+        """Update an existing article in the database
+
+        Args:
+            username: The account username
+            title: Article title
+            url: Article URL
+            **kwargs: Any article fields to update
+
+        Returns:
+            tuple[bool, str]: (success, error_message)
+            - If successful: (True, "")
+            - If article not found: (False, "Article not found")
+            - If database error: (False, "Database error: {error}")
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                # First check if article exists
+                cursor.execute(
+                    """
+                    SELECT id FROM articles 
+                    WHERE (username = ? AND title = ?) OR url = ?
+                    """,
+                    (username, title, url),
+                )
+                existing = cursor.fetchone()
+                if not existing:
+                    return False, "Article not found"
+
+                # Build update query dynamically based on provided kwargs
+                if not kwargs:
+                    return True, ""  # Nothing to update
+
+                set_clause = ", ".join(f"{k} = ?" for k in kwargs.keys())
+                values = list(kwargs.values())
+                values.extend([username, title, url])  # For WHERE clause
+
+                cursor.execute(
+                    f"""
+                    UPDATE articles 
+                    SET {set_clause}
+                    WHERE (username = ? AND title = ?) OR url = ?
+                    """,
+                    values,
+                )
+                conn.commit()
+                return True, ""
         except sqlite3.Error as e:
             return False, f"Database error: {str(e)}"
         except Exception as e:

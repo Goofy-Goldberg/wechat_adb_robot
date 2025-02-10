@@ -81,6 +81,7 @@ def sync_to_elasticsearch():
                 "repost": {"type": "boolean"},
                 "op_display_name": {"type": "keyword"},
                 "op_username": {"type": "keyword"},
+                "op_tagline": {"type": "text"},
             }
         }
     }

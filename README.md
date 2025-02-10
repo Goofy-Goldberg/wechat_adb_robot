@@ -33,7 +33,7 @@ These seem to be harmless in our case and can be ignored.
 1. Connect Android device via USB, enable debugging in developer mode, check "Allow debugging" and "Allow simulated clicks" in the device's developer options.
 2. Ensure [adb](https://developer.android.com/studio/command-line/adb) command is available
 3. Ensure [scrcpy](https://github.com/Genymobile/scrcpy) is installed, use `which scrcpy` to check. Scrcpy is used to sync the clipboard, to copy article URLs.
-4. Optionally create a `.env` file with specific settings (all are optional as they have defaults):
+4. Optionally create a `.env` file with specific settings (all are optional as they have defaults, except for the Elasticsearch configuration):
 
     ```
     MAX_ARTICLES=10                     # Number of articles to collect per profile (default: 10)
@@ -43,7 +43,7 @@ These seem to be harmless in our case and can be ignored.
     SKIP_APP_OPENING=true               # To speed things up in dev, skips getting to the Followed Accounts page in the app (default: false)
     SKIP_SCRCPY=true                    # If you want to run your own instance of scrcpy (default: false)
     HEADLESS=true                       # If you want to run scrcpy in headless mode. This will probably break URL retrieval (clipboard sync) (default: false)
-    ES_HOST=localhost                  # Elasticsearch host (default: localhost)
+    ES_HOST=localhost                  # Elasticsearch host (default: localhost - has to be set explicitly to enable fetching accounts from Elasticsearch)
     ES_PORT=9200                       # Elasticsearch port (default: 9200)
     ES_USERNAME=elastic               # Elasticsearch username (optional)
     ES_PASSWORD=changeme             # Elasticsearch password (optional)

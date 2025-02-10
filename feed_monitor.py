@@ -2,6 +2,8 @@
 import time
 import os
 import argparse
+import requests
+import urllib3
 from com.dtmilano.android.viewclient import ViewClient, AdbClient, ViewNotFoundException
 from dotenv import load_dotenv
 from lib.utils import new_stream_logger
@@ -197,13 +199,53 @@ class WeChatFeedMonitor:
 
         metadata["title"] = self.vc.findViewById("activity-name").getText()
         published_at = self.vc.findViewById("publish_time").getText()
-        try:
+        # try:
+        #     metadata["op_display_name"] = (
+        #         self.vc.findViewById("js_name").children[0].getText()
+        #     )
+        # except Exception as e:
+        #     self.logger.error(f"Error getting op_display_name: {e}")
+        #     metadata["op_display_name"] = None
+
+        # check if there is a view with resource-id copyright_info
+        copyright_info_view = self.vc.findViewWithAttribute(
+            "resource-id", "copyright_info"
+        )
+        if copyright_info_view:
+            metadata["repost"] = True
             metadata["op_display_name"] = (
-                self.vc.findViewById("js_name").children[0].getText()
+                copyright_info_view.children[1].children[0].getText()
             )
-        except Exception as e:
-            self.logger.error(f"Error getting op_display_name: {e}")
+            metadata["op_tagline"] = (
+                copyright_info_view.children[1].children[2].getText()
+            )
+            # tap the element
+            copyright_info_view.touch()
+            self.vc.dump()
+            # tap the tagline (auq) to get to details - we could also match the text
+            tagline_view = self.vc.findViewWithAttribute(
+                "resource-id", "com.tencent.mm:id/auq"
+            )
+            if tagline_view:
+                tagline_view.touch()
+                # wait 5 seconds for the details to load
+                # todo!: actually check if the details are loaded
+                time.sleep(5)
+                self.vc.dump()
+                # get the Weixin ID
+                # find the view with text "Weixin ID"
+                label_view = self.vc.findViewWithText("Weixin ID")
+                weixin_id_view = label_view.parent.children[
+                    4
+                ]  # todo: select more dynamically by finding the next sibling of the label view
+                metadata["op_username"] = weixin_id_view.getText()
+                # go back twice
+                self.bot.go_back(2)
+
+        else:
+            metadata["repost"] = False
             metadata["op_display_name"] = None
+            metadata["op_tagline"] = None
 
         # parse published_at - the format is like 2025年01月22日 08:08
         local_dt = datetime.strptime(published_at, "%Y年%m月%d日 %H:%M")
@@ -1095,12 +1137,9 @@ class WeChatFeedMonitor:
 
         # Check Elasticsearch if configured
         es_host = os.getenv("ES_HOST")
-        es_port = os.getenv("ES_PORT")
-        if es_host and es_port:
+        es_port = os.getenv("ES_PORT", "9200")
+        if es_host:
             try:
-                import requests
-                import urllib3
-
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
                 protocol = "https"  # Always use SSL as per sync_to_es.py
