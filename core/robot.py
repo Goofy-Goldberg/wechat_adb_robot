@@ -126,15 +126,15 @@ class ADBRobot:
             self.go_back()
         self.go_home()
 
-    def go_back(self, num_times=1):
+    def go_back(self, num_times=1, sleep=0.1):
         self.screenshot()
         for _ in range(num_times):
             self.shell("input keyevent 4")
-            time.sleep(0.1)
+            time.sleep(sleep)
 
-    def type(self, text):
+    def type(self, text, sleep=0.1):
         self.shell(f"input text {text}")
-        time.sleep(0.1)
+        time.sleep(sleep)
 
     def enter(self):
         self.shell("input keyevent 66")
@@ -154,8 +154,13 @@ class ADBRobot:
             self.shell("input keyevent 61")
             time.sleep(0.1)
 
-    def tap(self, x, y):
+    def tap(self, x, y, sleep=0.1):
         self.shell("input tap {} {}".format(x, y))
+        time.sleep(sleep)
+
+    def long_tap(self, x, y, duration=600, sleep=0.1):
+        self.shell("input swipe {} {} {} {} {}".format(x, y, x, y, duration))
+        time.sleep(sleep)
 
     def swipe_down(self):
         """
@@ -242,6 +247,8 @@ class ADBRobot:
                     start_x, start_y, start_x + dx, start_y + dy
                 )
             )
+
+        time.sleep(0.1)
 
     def uidump_and_get_node(self, retry_times=3):
         """

@@ -6,6 +6,13 @@ from .article import Article
 
 
 class ArticleDB:
+    ARTICLE_COLUMNS = """
+        id, username, title, published_at, timestamp, url, 
+        display_name, repost, op_display_name, op_username,
+        content, content_raw, content_translated, content_translated_raw,
+        title_translated, author, scraped_at, metadata
+    """
+
     def __init__(self, db_path="articles.db"):
         self.db_path = db_path
         self._init_db()
@@ -19,18 +26,22 @@ class ArticleDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL,
                     title TEXT,
-                    published_at REAL NOT NULL,
+                    published_at REAL,
                     timestamp REAL NOT NULL,
-                    url TEXT NOT NULL UNIQUE,
+                    url TEXT UNIQUE,
                     display_name TEXT,
                     repost BOOLEAN DEFAULT FALSE,
                     op_display_name TEXT,
                     op_username TEXT,
                     content TEXT,
+                    content_raw TEXT,
+                    content_translated TEXT,
+                    content_translated_raw TEXT,
+                    title_translated TEXT,
                     author TEXT,
-                    publish_time TEXT,
                     scraped_at REAL,
-                    UNIQUE(username, url)
+                    metadata TEXT,  -- JSON string for additional metadata (description, ogImage, biz, sn, mid, idx, etc.)
+                    UNIQUE(username, title)
                 )
             """)
             conn.commit()
@@ -54,8 +65,30 @@ class ArticleDB:
         repost: bool = False,
         op_display_name: Optional[str] = None,
         op_username: Optional[str] = None,
+        content: Optional[str] = None,
+        content_raw: Optional[str] = None,
+        content_translated: Optional[str] = None,
+        content_translated_raw: Optional[str] = None,
+        title_translated: Optional[str] = None,
+        metadata: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Add an article to the database if it doesn't exist
+
+        Args:
+            username: The account username
+            title: Article title
+            published_at: UTC timestamp of publication
+            url: Article URL
+            display_name: Display name of the account
+            repost: Whether this is a repost
+            op_display_name: Original poster's display name (for reposts)
+            op_username: Original poster's username (for reposts)
+            content: Processed article content
+            content_raw: Raw article content
+            content_translated: Translated article content
+            content_translated_raw: Raw translated article content
+            title_translated: Translated article title
+            metadata: JSON string containing additional metadata
 
         Returns:
             tuple[bool, str]: (success, error_message)
@@ -67,8 +100,13 @@ class ArticleDB:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO articles (username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO articles (
+                        username, title, published_at, timestamp, url, 
+                        display_name, repost, op_display_name, op_username,
+                        content, content_raw, content_translated, content_translated_raw,
+                        title_translated, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         username,
@@ -80,18 +118,21 @@ class ArticleDB:
                         repost,
                         op_display_name,
                         op_username,
+                        content,
+                        content_raw,
+                        content_translated,
+                        content_translated_raw,
+                        title_translated,
+                        metadata,
                     ),
                 )
                 conn.commit()
                 return True, ""
         except sqlite3.IntegrityError as e:
-            # Article already exists (either duplicate URL or username+url combination)
             return False, f"Duplicate article: {str(e)}"
         except sqlite3.Error as e:
-            # Other SQLite errors (connection issues, table problems, etc)
             return False, f"Database error: {str(e)}"
         except Exception as e:
-            # Unexpected errors
             return False, f"Unexpected error: {str(e)}"
 
     def article_exists(self, username, title):
@@ -112,8 +153,8 @@ class ArticleDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
-                SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
+                f"""
+                SELECT {self.ARTICLE_COLUMNS}
                 FROM articles 
                 WHERE username = ? AND title = ?
                 """,
@@ -121,42 +162,18 @@ class ArticleDB:
             )
             row = cursor.fetchone()
             if row:
-                return {
-                    "id": row[0],
-                    "username": row[1],
-                    "title": row[2],
-                    "published_at": row[3],
-                    "timestamp": row[4],
-                    "url": row[5],
-                    "display_name": row[6],
-                    "repost": bool(row[7]),
-                    "op_display_name": row[8],
-                    "op_username": row[9],
-                }
+                return self._row_to_dict(row)
             return None
 
     def get_all_articles(self):
         """Get all articles from the database"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username FROM articles"
-            )
-            articles = {}
-            for row in cursor.fetchall():
-                key = f"{row[0]}:{row[1]}"
-                articles[key] = {
-                    "username": row[0],
-                    "title": row[1],
-                    "published_at": row[2],
-                    "timestamp": row[3],
-                    "url": row[4],
-                    "display_name": row[5],
-                    "repost": bool(row[6]),
-                    "op_display_name": row[7],
-                    "op_username": row[8],
-                }
-            return articles
+            cursor.execute(f"SELECT {self.ARTICLE_COLUMNS} FROM articles")
+            return {
+                f"{row[1]}:{row[2]}": self._row_to_dict(row)
+                for row in cursor.fetchall()
+            }
 
     def get_articles_paginated(self, username=None, limit=100, offset=0, after_id=None):
         """Get articles with pagination and optional username filter
@@ -169,66 +186,29 @@ class ArticleDB:
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            base_query = f"SELECT {self.ARTICLE_COLUMNS} FROM articles"
 
             if username and after_id:
-                cursor.execute(
-                    """
-                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
-                    FROM articles 
-                    WHERE username = ? AND id > ?
-                    ORDER BY timestamp DESC
-                    LIMIT ? OFFSET ?
-                """,
-                    (username, after_id, limit, offset),
-                )
+                where_clause = "WHERE username = ? AND id > ?"
+                params = (username, after_id, limit, offset)
             elif username:
-                cursor.execute(
-                    """
-                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
-                    FROM articles 
-                    WHERE username = ?
-                    ORDER BY timestamp DESC
-                    LIMIT ? OFFSET ?
-                """,
-                    (username, limit, offset),
-                )
+                where_clause = "WHERE username = ?"
+                params = (username, limit, offset)
             elif after_id:
-                cursor.execute(
-                    """
-                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
-                    FROM articles 
-                    WHERE id > ?
-                    ORDER BY timestamp DESC
-                    LIMIT ? OFFSET ?
-                """,
-                    (after_id, limit, offset),
-                )
+                where_clause = "WHERE id > ?"
+                params = (after_id, limit, offset)
             else:
-                cursor.execute(
-                    """
-                    SELECT id, username, title, published_at, timestamp, url, display_name, repost, op_display_name, op_username
-                    FROM articles 
-                    ORDER BY timestamp DESC
-                    LIMIT ? OFFSET ?
-                """,
-                    (limit, offset),
-                )
+                where_clause = ""
+                params = (limit, offset)
 
-            return [
-                {
-                    "id": row[0],
-                    "username": row[1],
-                    "title": row[2],
-                    "published_at": row[3],
-                    "timestamp": row[4],
-                    "url": row[5],
-                    "display_name": row[6],
-                    "repost": bool(row[7]),
-                    "op_display_name": row[8],
-                    "op_username": row[9],
-                }
-                for row in cursor.fetchall()
-            ]
+            query = f"""
+                {base_query}
+                {where_clause}
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor.execute(query, params)
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def get_unique_usernames(self):
         """Get list of all unique usernames"""
@@ -236,3 +216,26 @@ class ArticleDB:
             cursor = conn.cursor()
             cursor.execute("SELECT DISTINCT username FROM articles ORDER BY username")
             return [row[0] for row in cursor.fetchall()]
+
+    def _row_to_dict(self, row: tuple) -> dict:
+        """Convert a database row to a dictionary"""
+        return {
+            "id": row[0],
+            "username": row[1],
+            "title": row[2],
+            "published_at": row[3],
+            "timestamp": row[4],
+            "url": row[5],
+            "display_name": row[6],
+            "repost": bool(row[7]),
+            "op_display_name": row[8],
+            "op_username": row[9],
+            "content": row[10],
+            "content_raw": row[11],
+            "content_translated": row[12],
+            "content_translated_raw": row[13],
+            "title_translated": row[14],
+            "author": row[15],
+            "scraped_at": row[16],
+            "metadata": row[17],
+        }

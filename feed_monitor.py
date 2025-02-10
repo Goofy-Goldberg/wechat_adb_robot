@@ -157,6 +157,15 @@ class WeChatFeedMonitor:
             published_at=article.published_at,
             url=article.url,
             display_name=article.display_name,
+            repost=article.repost,
+            op_display_name=article.op_display_name,
+            op_username=article.op_username,
+            content=article.content,
+            content_raw=article.content_raw,
+            content_translated=article.content_translated,
+            content_translated_raw=article.content_translated_raw,
+            title_translated=article.title_translated,
+            metadata=None,  # This will be populated by the scraper later, if used
         )
 
         if success:
@@ -165,7 +174,6 @@ class WeChatFeedMonitor:
             return ArticleStoreStatus.SUCCESS
         else:
             if "Duplicate article" in error_msg:
-                # self.logger.info("Article already exists in database (duplicate URL)")
                 return ArticleStoreStatus.DUPLICATE
             elif "Database error" in error_msg:
                 self.logger.error(f"Database error: {error_msg}")
@@ -219,7 +227,6 @@ class WeChatFeedMonitor:
 
                 # tap three dots button
                 self.bot.tap(1000, 209)
-                time.sleep(0.1)
 
                 self.vc.dump()
                 # find the copy link button
@@ -234,6 +241,10 @@ class WeChatFeedMonitor:
                 else:
                     copy_link_button.touch()
                     time.sleep(0.3)
+
+                    # swipe to dismiss the clipboard popup
+                    self.bot.swipe(start_x=250, start_y=2220, dx=-100)
+                    time.sleep(0.1)
 
                     # if scrcpy is running, it should synchronise the clipboard. There might be a way to do this directly through adb. For now, we have to access the computer's clipboard.
                     return pyperclip.paste()
@@ -255,9 +266,89 @@ class WeChatFeedMonitor:
             else:
                 self.logger.info("Clipboard did not change, retrying...")
 
-        # swipe to dismiss the clipboard popup
-        self.bot.swipe(start_x=250, start_y=2220, dx=-100)
-        time.sleep(0.1)
+        def get_article_content():
+            # copy all text in the article
+            self.bot.long_tap(90, 360)  # tap title (body has a custom context menu)
+            self.bot.tap(310, 245)  # tap the select all button
+            self.bot.tap(140, 245)  # tap the copy button
+            time.sleep(0.1)
+
+            # swipe to dismiss the clipboard popup
+            self.bot.swipe(start_x=250, start_y=2220, dx=-100)
+            time.sleep(0.1)
+
+            # get the clipboard
+            content_raw = pyperclip.paste()
+
+            # clean the text
+            content_lines = content_raw.split("\n")
+            content_lines = [
+                line.strip()
+                for line in content_lines
+                if line.strip() and line.strip() != "Image"
+            ]
+
+            title = content_lines[0]
+
+            content = "\n".join(content_lines[3:])
+
+            return content_raw, content, title
+
+        metadata["content_raw"], metadata["content"], metadata["title"] = (
+            get_article_content()
+        )
+
+        # now translate
+        translation_ready = False
+
+        while not translation_ready:
+            # tap three dots button
+            self.bot.tap(1000, 209, sleep=1)
+
+            # swipe the bottom row of buttons to reveal the translate button
+            self.bot.swipe(start_x=1000, start_y=1960, dx=-500)
+            self.vc.dump()
+
+            # find the copy link button
+            translate_button = self.vc.findViewWithText("Translate Full Text")
+            if not translate_button:
+                self.logger.error("Cannot find translate button, ending loop...")
+                raise Exception("Cannot find translate button")
+
+            translate_button.touch()
+
+            while True:
+                time.sleep(1)
+                self.vc.dump()
+
+                # check if there is a view with the text "Network error. Try again later."
+                network_error_view = self.vc.findViewWithText(
+                    "Network error. Try again later."
+                )
+                if network_error_view:
+                    self.logger.error("Network error, retrying...")
+                    self.bot.go_back()  # dismiss the popup
+                else:
+                    translation_ready = True
+                    break
+
+                metadata["content_translated_raw"], metadata["content_translated"] = (
+                    get_article_content()
+                )
+
+                if metadata["content_translated"] != metadata["content"]:
+                    translation_ready = True
+                    break
+                else:
+                    self.logger.info("Translation not ready, retrying...")
+                    metadata["content_translated_raw"] = None
+                    metadata["content_translated"] = None
+
+        (
+            metadata["content_translated_raw"],
+            metadata["content_translated"],
+            metadata["title_translated"],
+        ) = get_article_content()
 
         metadata["url"] = clipboard_new
 
@@ -285,7 +376,7 @@ class WeChatFeedMonitor:
             if not product.get("url"):
                 raise ValueError("No URL found in processed article")
 
-            return product["url"]
+            return product
         except Exception as e:
             self.logger.error(f"Failed to process article: {str(e)}")
             # Go back to ensure we're in the right state for the next article
@@ -503,17 +594,10 @@ class WeChatFeedMonitor:
                             self.vc.dump()
 
                         # process the article
-                        metadata = self.process_article_inner()
-                        if display_name != metadata["op_display_name"]:
-                            self.logger.info("Article is a repost...")
-                            self.article_op_display_name = metadata[
-                                "op_display_name"
-                            ]  # todo: retreive the username by going to the profile
-                        article.repost = True
-                        article.url = metadata["url"]
-                        article.title = metadata["title"]
-                        article.published_at = metadata["published_at"]
-                        article.display_name = metadata["op_display_name"]
+                        article_metadata = self.process_article(article_view)
+                        # Update article attributes from metadata using dictionary unpacking
+                        article.__dict__.update(article_metadata)
+                        # Store the article immediately after getting URL
                         self.logger.info(article)
                         self.logger.info("Storing article...")
                         status = self.store_article(article)
@@ -523,7 +607,7 @@ class WeChatFeedMonitor:
                             self.logger.info(
                                 "Article already exists in database (duplicate URL), moving to the next profile..."
                             )
-                            self.bot.go_back()
+                            # self.bot.go_back()
                             time.sleep(0.1)
                             break
                         elif status == ArticleStoreStatus.DATABASE_ERROR:
@@ -832,9 +916,9 @@ class WeChatFeedMonitor:
 
                             # Get the article URL
                             try:
-                                article.url = self.process_article(article_view)
-                                time.sleep(0.1)
-
+                                article_metadata = self.process_article(article_view)
+                                # Update article attributes from metadata using dictionary unpacking
+                                article.__dict__.update(article_metadata)
                                 # Store the article immediately after getting URL
                                 status = self.store_article(article)
                                 if status == ArticleStoreStatus.SUCCESS:

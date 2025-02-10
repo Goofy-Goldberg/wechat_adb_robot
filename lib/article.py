@@ -15,6 +15,14 @@ class Article:
     repost: bool = False
     op_display_name: Optional[str] = None
     op_username: Optional[str] = None
+    content: Optional[str] = None
+    content_raw: Optional[str] = None
+    content_translated: Optional[str] = None
+    content_translated_raw: Optional[str] = None
+    title_translated: Optional[str] = None
+    author: Optional[str] = None
+    scraped_at: Optional[float] = None
+    metadata: Optional[str] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -38,6 +46,14 @@ class Article:
             "repost": self.repost,
             "op_display_name": self.op_display_name,
             "op_username": self.op_username,
+            "content": self.content,
+            "content_raw": self.content_raw,
+            "content_translated": self.content_translated,
+            "content_translated_raw": self.content_translated_raw,
+            "title_translated": self.title_translated,
+            "author": self.author,
+            "scraped_at": self.scraped_at,
+            "metadata": self.metadata,
         }
 
     @classmethod
