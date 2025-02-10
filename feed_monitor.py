@@ -354,7 +354,7 @@ class WeChatFeedMonitor:
 
         return metadata
 
-    def process_article(self, view_to_click_to_open):
+    def open_and_process_article(self, view_to_click_to_open):
         """
         Process an article by clicking on it and then copying the link
         Accepts a view object to click to open the article
@@ -426,7 +426,31 @@ class WeChatFeedMonitor:
 
                 if os.getenv("PIN"):
                     self.logger.info("PIN provided, unlocking device")
-                    self.bot.unlock()
+                    # adb shell input text XXXX && adb shell input keyevent 66
+                    # repeat 66 three times with a small delay to ensure we get to the pin input
+                    self.bot.shell("input keyevent 66")
+                    time.sleep(0.25)
+                    self.bot.shell("input keyevent 66")
+                    time.sleep(0.25)
+                    self.bot.shell("input keyevent 66")
+                    time.sleep(0.25)
+                    # check if there is com.android.systemui:id/auth_ripple
+                    self.vc.dump()
+                    if not self.vc.findViewWithAttribute(
+                        "resource-id", "com.android.systemui:id/auth_ripple"
+                    ):
+                        # enter pin
+                        self.bot.shell(f"input text {os.getenv('PIN')}")
+                        self.bot.shell("input keyevent 66")
+                        time.sleep(0.25)
+                    else:
+                        # try 82
+                        self.bot.shell("input keyevent 82")
+                        time.sleep(0.25)
+                        # enter pin
+                        self.bot.shell(f"input text {os.getenv('PIN')}")
+                        self.bot.shell("input keyevent 66")
+                        time.sleep(0.25)
 
                 # Return to home screen
                 self.logger.info("Going to home screen")
@@ -554,16 +578,20 @@ class WeChatFeedMonitor:
                             continue
 
                     # check if there is a com.tencent.mm:id/acf with text "Top" - if yes, we need an extra key_down to get to the latest articles
-                    try:
-                        if (
-                            self.vc.findViewWithAttribute(
-                                "resource-id", "com.tencent.mm:id/acf"
-                            ).getText()
-                            == "Top"
-                        ):
+                    top_view = self.vc.findViewWithText("Top")
+                    if top_view:
+                        self.bot.key_down()
+                        # get the grandparent view, then its cpy child and count how many direct children it has
+                        grandparent_view = top_view.parent.parent
+                        cpy_views = self.find_in_descendants(
+                            grandparent_view, "resource-id", "com.tencent.mm:id/cpy"
+                        )
+                        number_of_top_articles = (
+                            len(cpy_views[0].children) if cpy_views else 0
+                        )
+                        # press down as many times as there are top articles (or not if the view is not unfolded)
+                        for i in range(number_of_top_articles):
                             self.bot.key_down()
-                    except Exception:
-                        pass
 
                     display_name_view = self.vc.findViewById("com.tencent.mm:id/atj")
                     if display_name_view:
@@ -594,22 +622,22 @@ class WeChatFeedMonitor:
                             self.vc.dump()
 
                         # process the article
-                        article_metadata = self.process_article(article_view)
+                        article_metadata = self.process_article_inner()
                         # Update article attributes from metadata using dictionary unpacking
                         article.__dict__.update(article_metadata)
                         # Store the article immediately after getting URL
-                        self.logger.info(article)
                         self.logger.info("Storing article...")
                         status = self.store_article(article)
                         if status == ArticleStoreStatus.SUCCESS:
                             pass
                         elif status == ArticleStoreStatus.DUPLICATE:
-                            self.logger.info(
-                                "Article already exists in database (duplicate URL), moving to the next profile..."
-                            )
-                            # self.bot.go_back()
-                            time.sleep(0.1)
-                            break
+                            if os.getenv("SKIP_DUPLICATES", "false").lower() == "true":
+                                self.logger.info(
+                                    "Article already exists in database (duplicate URL), moving to the next profile..."
+                                )
+                                # self.bot.go_back()
+                                time.sleep(0.1)
+                                break
                         elif status == ArticleStoreStatus.DATABASE_ERROR:
                             self.logger.warning(
                                 "Database error occurred, retrying in 5 seconds..."
@@ -916,7 +944,9 @@ class WeChatFeedMonitor:
 
                             # Get the article URL
                             try:
-                                article_metadata = self.process_article(article_view)
+                                article_metadata = self.open_and_process_article(
+                                    article_view
+                                )
                                 # Update article attributes from metadata using dictionary unpacking
                                 article.__dict__.update(article_metadata)
                                 # Store the article immediately after getting URL

@@ -93,22 +93,24 @@ class ADBRobot:
         self.shell("screencap -p /sdcard/screenshot.png")
         self.shell("pull /sdcard/screenshot.png")
 
-    def unlock(self):
-        # adb shell input text XXXX && adb shell input keyevent 66
-        pin = os.getenv("PIN")
-        if not pin:
-            raise ValueError("PIN is not set")
-        # repeat 66 three times with a small delay to ensure we get to the pin input
-        self.shell("input keyevent 66")
-        time.sleep(0.25)
-        self.shell("input keyevent 66")
-        time.sleep(0.25)
-        self.shell("input keyevent 66")
-        time.sleep(0.25)
-        # enter pin
-        self.shell(f"input text {pin}")
-        self.shell("input keyevent 66")
-        time.sleep(0.25)
+    # def unlock(self):
+    #     # adb shell input text XXXX && adb shell input keyevent 66
+    #     pin = os.getenv("PIN")
+    #     if not pin:
+    #         raise ValueError("PIN is not set")
+    #     # repeat 66 three times with a small delay to ensure we get to the pin input
+    #     self.shell("input keyevent 66")
+    #     time.sleep(0.25)
+    #     self.shell("input keyevent 66")
+    #     time.sleep(0.25)
+    #     self.shell("input keyevent 66")
+    #     time.sleep(0.25)
+    #     # check if there is com.android.systemui:id/auth_ripple
+    #     self.
+    #     # enter pin
+    #     self.shell(f"input text {pin}")
+    #     self.shell("input keyevent 66")
+    #     time.sleep(0.25)
 
     def screen_off(self):
         if self.is_screen_on():

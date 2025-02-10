@@ -48,6 +48,7 @@ These seem to be harmless in our case and can be ignored.
     ES_USERNAME=elastic               # Elasticsearch username (optional)
     ES_PASSWORD=changeme             # Elasticsearch password (optional)
     ES_VERIFY_CERTS=false           # Whether to verify SSL certificates (default: false)
+    SKIP_DUPLICATES=false             # Whether to skip duplicate (already seen) articles (default: true)
     ```
 
 ### Running the Script
