@@ -241,6 +241,12 @@ class WeChatFeedMonitor:
                 metadata["op_username"] = weixin_id_view.getText()
                 # go back twice
                 self.bot.go_back(2)
+            else:
+                self.logger.error(
+                    "Cannot find tagline view, setting OP display name and tagline to None"
+                )
+                metadata["op_display_name"] = None
+                metadata["op_tagline"] = None
 
         else:
             metadata["repost"] = False
