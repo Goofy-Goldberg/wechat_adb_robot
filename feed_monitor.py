@@ -641,14 +641,14 @@ class WeChatFeedMonitor:
                         for i in range(number_of_top_articles):
                             self.bot.key_down()
 
-                    display_name_view = self.vc.findViewById("com.tencent.mm:id/atj")
-                    if display_name_view:
-                        display_name = display_name_view.getText()
-                        self.logger.info(f"Display name: {display_name}")
-                    else:
-                        self.logger.error(
-                            "Cannot find display name view, won't be able to check if articles are reposted"
-                        )
+                    # display_name_view = self.vc.findViewById("com.tencent.mm:id/atj")
+                    # if display_name_view:
+                    #     display_name = display_name_view.getText()
+                    #     self.logger.info(f"Display name: {display_name}")
+                    # else:
+                    #     self.logger.error(
+                    #         "Cannot find display name view, won't be able to check if articles are reposted"
+                    #     )
 
                     for article_index in range(max_articles):
                         self.logger.info(
@@ -679,7 +679,7 @@ class WeChatFeedMonitor:
                         if status == ArticleStoreStatus.SUCCESS:
                             pass
                         elif status == ArticleStoreStatus.DUPLICATE:
-                            if os.getenv("SKIP_DUPLICATES", "false").lower() == "true":
+                            if os.getenv("SKIP_DUPLICATES", "true").lower() == "true":
                                 self.logger.info(
                                     "Article already exists in database (duplicate URL), moving to the next profile..."
                                 )
