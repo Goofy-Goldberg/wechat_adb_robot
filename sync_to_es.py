@@ -72,17 +72,32 @@ def sync_to_elasticsearch():
     mapping = {
         "mappings": {
             "properties": {
-                "id": {"type": "integer"},
                 "username": {"type": "keyword"},
-                "title": {"type": "text"},
                 "published_at": {"type": "date"},
                 "timestamp": {"type": "date"},
                 "url": {"type": "keyword"},
-                "display_name": {"type": "keyword"},
+                "display_name": {
+                    "type": "text",
+                    "analyzer": "smartcn",
+                    "fields": {"keyword": {"type": "keyword"}},
+                },
+                "display_name_translated": {
+                    "type": "text",
+                    "analyzer": "english",
+                    "fields": {"keyword": {"type": "keyword"}},
+                },
                 "repost": {"type": "boolean"},
-                "op_display_name": {"type": "keyword"},
+                "op_display_name": {
+                    "type": "text",
+                    "analyzer": "smartcn",
+                    "fields": {"keyword": {"type": "keyword"}},
+                },
                 "op_username": {"type": "keyword"},
                 "op_tagline": {"type": "text"},
+                "content": {"type": "text", "analyzer": "smartcn"},
+                "content_translated": {"type": "text", "analyzer": "english"},
+                "title": {"type": "text", "analyzer": "smartcn"},
+                "title_translated": {"type": "text", "analyzer": "english"},
             }
         }
     }
@@ -102,6 +117,9 @@ def sync_to_elasticsearch():
     error_count = 0
 
     for article_key, article_data in articles_dict.items():
+        # drop the id field - it's not needed for ES, we'll use the base64 encoded article_key as the document ID
+        article_data.pop("id", None)
+
         # Create a safe document ID using base64 encoding
         doc_id = base64.urlsafe_b64encode(article_key.encode()).decode().rstrip("=")
 

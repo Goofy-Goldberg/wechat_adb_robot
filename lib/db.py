@@ -6,13 +6,6 @@ from .article import Article
 
 
 class ArticleDB:
-    ARTICLE_COLUMNS = """
-        id, username, title, published_at, timestamp, url, 
-        display_name, repost, op_display_name, op_username,
-        content, content_raw, content_translated, content_translated_raw,
-        title_translated, author, scraped_at, metadata
-    """
-
     def __init__(self, db_path="articles.db"):
         self.db_path = db_path
         self._init_db()
@@ -38,7 +31,6 @@ class ArticleDB:
                     content_translated TEXT,
                     content_translated_raw TEXT,
                     title_translated TEXT,
-                    author TEXT,
                     scraped_at REAL,
                     metadata TEXT,  -- JSON string for additional metadata (description, ogImage, biz, sn, mid, idx, etc.)
                     UNIQUE(username, title)
@@ -223,25 +215,21 @@ class ArticleDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"""
-                SELECT {self.ARTICLE_COLUMNS}
-                FROM articles 
-                WHERE username = ? AND title = ?
-                """,
+                "SELECT * FROM articles WHERE username = ? AND title = ?",
                 (username, title),
             )
             row = cursor.fetchone()
             if row:
-                return self._row_to_dict(row)
+                return self._row_to_dict(row, cursor)
             return None
 
     def get_all_articles(self):
         """Get all articles from the database"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT {self.ARTICLE_COLUMNS} FROM articles")
+            cursor.execute("SELECT * FROM articles")
             return {
-                f"{row[1]}:{row[2]}": self._row_to_dict(row)
+                f"{row[1]}:{row[2]}": self._row_to_dict(row, cursor)
                 for row in cursor.fetchall()
             }
 
@@ -256,7 +244,7 @@ class ArticleDB:
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            base_query = f"SELECT {self.ARTICLE_COLUMNS} FROM articles"
+            base_query = "SELECT * FROM articles"
 
             if username and after_id:
                 where_clause = "WHERE username = ? AND id > ?"
@@ -278,7 +266,7 @@ class ArticleDB:
                 LIMIT ? OFFSET ?
             """
             cursor.execute(query, params)
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+            return [self._row_to_dict(row, cursor) for row in cursor.fetchall()]
 
     def get_unique_usernames(self):
         """Get list of all unique usernames"""
@@ -287,25 +275,13 @@ class ArticleDB:
             cursor.execute("SELECT DISTINCT username FROM articles ORDER BY username")
             return [row[0] for row in cursor.fetchall()]
 
-    def _row_to_dict(self, row: tuple) -> dict:
+    def _row_to_dict(self, row: tuple, cursor) -> dict:
         """Convert a database row to a dictionary"""
-        return {
-            "id": row[0],
-            "username": row[1],
-            "title": row[2],
-            "published_at": row[3],
-            "timestamp": row[4],
-            "url": row[5],
-            "display_name": row[6],
-            "repost": bool(row[7]),
-            "op_display_name": row[8],
-            "op_username": row[9],
-            "content": row[10],
-            "content_raw": row[11],
-            "content_translated": row[12],
-            "content_translated_raw": row[13],
-            "title_translated": row[14],
-            "author": row[15],
-            "scraped_at": row[16],
-            "metadata": row[17],
-        }
+        columns = [desc[0] for desc in cursor.description]  # Get column names
+        result = dict(zip(columns, row))
+
+        # Handle any type conversions
+        if "repost" in result:
+            result["repost"] = bool(result["repost"])
+
+        return result
