@@ -49,6 +49,8 @@ These seem to be harmless in our case and can be ignored.
     ES_PASSWORD=changeme             # Elasticsearch password (optional)
     ES_VERIFY_CERTS=false           # Whether to verify SSL certificates (default: false)
     SKIP_DUPLICATES=false             # Whether to skip duplicate (already seen) articles (default: true)
+    API_HOST=localhost               # API host (for storing articles in Elasticsearch) (default: localhost)
+    API_PORT=8000                    # API port (default: 8000)
     ```
 
 ### Running the Script
