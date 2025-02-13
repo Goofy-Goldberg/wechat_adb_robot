@@ -16,6 +16,10 @@ from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from enum import Enum, auto
+from lib.keywords import KeywordExtractor
+
+# Set tokenizers parallelism to false to avoid deadlocks
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class FeedArticleItem:
@@ -63,6 +67,7 @@ class WeChatFeedMonitor:
         }
         self.seen_articles_this_run = {}
         self.clipboard = None
+        self.keyword_extractor = KeywordExtractor()
 
     def _get_view_structure(self):
         self.vc.dump()
@@ -146,6 +151,23 @@ class WeChatFeedMonitor:
             - INVALID_DATA: Article data is invalid or incomplete
             - UNEXPECTED_ERROR: Other unexpected errors
         """
+        # Extract keywords if we have translated content
+        if article.content_translated:
+            start_time = time.time()
+            article.keywords = self.keyword_extractor.extract_keywords(
+                article.content_translated
+            )
+            extraction_time = time.time() - start_time
+
+            if article.keywords:
+                self.logger.info(
+                    f"Successfully extracted keywords from translated content in {extraction_time:.2f} seconds"
+                )
+            else:
+                self.logger.warning(
+                    f"Failed to extract keywords from translated content after {extraction_time:.2f} seconds"
+                )
+
         # Validate article data
         if not all(
             [article.username, article.title, article.published_at, article.url]
@@ -168,6 +190,7 @@ class WeChatFeedMonitor:
             content_translated_raw=article.content_translated_raw,
             title_translated=article.title_translated,
             metadata=None,  # This will be populated by the scraper later, if used
+            keywords=article.keywords,  # Keywords are already a string from the extractor
         )
 
         if success:
@@ -603,6 +626,7 @@ class WeChatFeedMonitor:
 
                     if not found_result:
                         # check if there is any view with the text "Official Accounts,按钮,2之2" - that's the tab heading that sometimes appears to narrow down the search results
+                        self.vc.dump()  # seems like we have to dump again
                         filter_tab_view = self.vc.findViewWithText(
                             "Official Accounts,按钮,2之2"
                         )

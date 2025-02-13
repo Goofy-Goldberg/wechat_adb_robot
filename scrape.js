@@ -47,7 +47,7 @@ async function updateArticleContent(db, url, articleData) {
         title,
         author,
         content,
-        publishTime,
+        publishTime: published_at,
         url: originalUrl,
         // Fields that will go into metadata
         description,
@@ -81,7 +81,7 @@ async function updateArticleContent(db, url, articleData) {
     `, [
         content,
         author,
-        publishTime,
+        published_at,
         now,
         JSON.stringify(metadata),
         url
@@ -219,7 +219,7 @@ async function scrapeArticle(url) {
                 title,
                 author,
                 content,
-                publishTime,
+                published_at: publishTime,
                 description,
                 ogImage,
                 ...metaData,

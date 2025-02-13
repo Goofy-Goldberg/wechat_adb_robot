@@ -12,4 +12,5 @@ dependencies = [
     "fastapi>=0.115.6",
     "uvicorn>=0.34.0",
     "requests>=2.32.3",
+    "keybert>=0.9.0",
 ]

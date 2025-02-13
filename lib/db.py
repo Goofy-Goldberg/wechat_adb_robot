@@ -33,6 +33,7 @@ class ArticleDB:
                     title_translated TEXT,
                     scraped_at REAL,
                     metadata TEXT,  -- JSON string for additional metadata (description, ogImage, biz, sn, mid, idx, etc.)
+                    keywords TEXT,  -- JSON array of extracted keywords from content_translated
                     UNIQUE(username, title)
                 )
             """)
@@ -63,6 +64,7 @@ class ArticleDB:
         content_translated_raw: Optional[str] = None,
         title_translated: Optional[str] = None,
         metadata: Optional[str] = None,
+        keywords: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Add or update an article in the database
 
@@ -81,6 +83,7 @@ class ArticleDB:
             content_translated_raw: Raw translated article content
             title_translated: Translated article title
             metadata: JSON string containing additional metadata
+            keywords: JSON array of extracted keywords from content_translated
 
         Returns:
             tuple[bool, str]: (success, error_message)
@@ -112,9 +115,9 @@ class ArticleDB:
                         username, title, published_at, timestamp, url, 
                         display_name, repost, op_display_name, op_username,
                         content, content_raw, content_translated, content_translated_raw,
-                        title_translated, metadata
+                        title_translated, metadata, keywords
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         username,
@@ -132,6 +135,7 @@ class ArticleDB:
                         content_translated_raw,
                         title_translated,
                         metadata,
+                        keywords,
                     ),
                 )
                 conn.commit()

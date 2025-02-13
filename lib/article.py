@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from time import time
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -23,6 +23,7 @@ class Article:
     author: Optional[str] = None
     scraped_at: Optional[float] = None
     metadata: Optional[str] = None
+    keywords: Optional[str] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -54,6 +55,7 @@ class Article:
             "author": self.author,
             "scraped_at": self.scraped_at,
             "metadata": self.metadata,
+            "keywords": self.keywords,
         }
 
     @classmethod
