@@ -8,6 +8,7 @@ import urllib3
 from dotenv import load_dotenv
 from lib.db import ArticleDB
 import base64
+import json
 
 # Suppress SSL verification warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -38,12 +39,41 @@ def get_es_config() -> tuple[str, int, bool, bool, tuple[str, str] | None]:
 
 def prepare_article_for_es(article: Dict[str, Any]) -> Dict[str, Any]:
     """Prepare article data for Elasticsearch indexing"""
-    # Convert Unix timestamps to ISO format for better ES compatibility
     es_doc = article.copy()
 
+    # Convert Unix timestamps to ISO format for better ES compatibility
     for ts_field in ["published_at", "timestamp"]:
         if es_doc.get(ts_field):
             es_doc[ts_field] = datetime.fromtimestamp(es_doc[ts_field]).isoformat()
+
+    # Restructure account metadata
+    es_doc["account_metadata"] = {
+        "username": es_doc.pop("username", None),
+        "display_name": es_doc.pop("display_name", None),
+        "display_name_translated": es_doc.pop("display_name_translated", None),
+    }
+
+    # Restructure OP metadata
+    es_doc["op_metadata"] = {
+        "username": es_doc.pop("op_username", None),
+        "display_name": es_doc.pop("op_display_name", None),
+        "tagline": es_doc.pop("op_tagline", None),
+    }
+
+    # Convert keywords from JSON string to both formats
+    if es_doc.get("keywords"):
+        try:
+            keywords_list = json.loads(es_doc["keywords"])
+            # Scored version (nested objects)
+            es_doc["keywords_scored"] = [
+                {"keyword": kw, "score": score} for kw, score in keywords_list
+            ]
+            # Simple version (just the keywords)
+            es_doc["keywords"] = [kw for kw, _ in keywords_list]
+        except Exception as e:
+            logger.warning(f"Failed to parse keywords JSON: {e}")
+            es_doc["keywords"] = []
+            es_doc["keywords_scored"] = []
 
     return es_doc
 
@@ -72,32 +102,56 @@ def sync_to_elasticsearch():
     mapping = {
         "mappings": {
             "properties": {
-                "username": {"type": "keyword"},
+                "url": {"type": "keyword"},
                 "published_at": {"type": "date"},
                 "timestamp": {"type": "date"},
-                "url": {"type": "keyword"},
-                "display_name": {
-                    "type": "text",
-                    "analyzer": "smartcn",
-                    "fields": {"keyword": {"type": "keyword"}},
-                },
-                "display_name_translated": {
-                    "type": "text",
-                    "analyzer": "english",
-                    "fields": {"keyword": {"type": "keyword"}},
+                "account_metadata": {
+                    # "type": "nested",
+                    "properties": {
+                        "username": {"type": "keyword"},
+                        "display_name": {
+                            "type": "text",
+                            "analyzer": "smartcn",
+                            "fields": {"keyword": {"type": "keyword"}},
+                        },
+                        "display_name_translated": {
+                            "type": "text",
+                            "analyzer": "english",
+                            "fields": {"keyword": {"type": "keyword"}},
+                        },
+                    },
                 },
                 "repost": {"type": "boolean"},
-                "op_display_name": {
-                    "type": "text",
-                    "analyzer": "smartcn",
-                    "fields": {"keyword": {"type": "keyword"}},
+                "op_metadata": {
+                    # "type": "nested",
+                    "properties": {
+                        "username": {"type": "keyword"},
+                        "display_name": {
+                            "type": "text",
+                            "analyzer": "smartcn",
+                            "fields": {"keyword": {"type": "keyword"}},
+                        },
+                        "tagline": {"type": "text"},
+                    },
                 },
-                "op_username": {"type": "keyword"},
-                "op_tagline": {"type": "text"},
                 "content": {"type": "text", "analyzer": "smartcn"},
                 "content_translated": {"type": "text", "analyzer": "english"},
                 "title": {"type": "text", "analyzer": "smartcn"},
                 "title_translated": {"type": "text", "analyzer": "english"},
+                "keywords": {
+                    "type": "keyword",
+                    "fields": {"text": {"type": "text", "analyzer": "english"}},
+                },
+                "keywords_scored": {
+                    "type": "nested",
+                    "properties": {
+                        "keyword": {
+                            "type": "keyword",
+                            "fields": {"text": {"type": "text", "analyzer": "english"}},
+                        },
+                        "score": {"type": "float"},
+                    },
+                },
             }
         }
     }
